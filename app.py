@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import base64
-import json
 from PIL import Image
 from io import BytesIO
 import os
@@ -13,7 +12,6 @@ st.set_page_config(
 )
 
 API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
 MODEL = "openrouter/free"
 
 st.title("🦁 DONCULLER-TRADE47")
@@ -54,7 +52,6 @@ imagem = st.file_uploader(
 if imagem:
 
     img = Image.open(imagem).convert("RGB")
-
     img.thumbnail((1600, 1600))
 
     st.image(
@@ -63,18 +60,21 @@ if imagem:
         use_container_width=True
     )
 
-    if st.button("🦁 ANALISAR GRÁFICO", use_container_width=True):
+    if st.button(
+        "🦁 ANALISAR GRÁFICO",
+        use_container_width=True
+    ):
 
         if not API_KEY:
             st.error(
                 "Chave OpenRouter não encontrada. "
-                "Verifica as variáveis Environment no Render."
+                "Verifica o Environment no Render."
             )
 
         else:
 
             with st.spinner(
-                "A DONCULLER-TRADE47 está a analisar o gráfico..."
+                "DONCULLER-TRADE47 está a analisar..."
             ):
 
                 try:
@@ -87,40 +87,73 @@ if imagem:
                     ).decode("utf-8")
 
                     prompt = f"""
-                    És o motor de análise técnica da DONCULLER-TRADE47.
+És o motor de análise técnica da
+DONCULLER-TRADE47.
 
-                    Analisa cuidadosamente o screenshot enviado.
+Analisa cuidadosamente o screenshot.
 
-                    Ativo: {ativo}
-                    Timeframe: {timeframe}
+ATIVO: {ativo}
+TIMEFRAME: {timeframe}
 
-                    Identifica:
+OBJETIVO:
 
-                    1. Tendência: ALTA, BAIXA ou LATERAL.
-                    2. Estrutura do mercado.
-                    3. Suportes e resistências visíveis.
-                    4. Padrões de velas japonesas.
-                    5. Possíveis sinais de reversão.
-                    6. Decisão: BUY, SELL ou AGUARDAR.
-                    7. Possível zona de entrada.
-                    8. Stop Loss sugerido.
-                    9. Take Profit sugerido.
-                    10. Justificação da análise.
+Fazer uma análise técnica rigorosa,
+clara e organizada.
 
-                    REGRAS IMPORTANTES:
+ESTRUTURA OBRIGATÓRIA:
 
-                    - Nunca inventes preços que não estejam legíveis.
-                    - Se não conseguires identificar os preços,
-                      informa que são necessários mais dados.
-                    - Não inventes indicadores.
-                    - Se o gráfico estiver confuso, responde AGUARDAR.
-                    - Não apresentes probabilidades de sucesso inventadas.
-                    - Distingue observações de hipóteses.
-                    - Considera o risco de operações em índices sintéticos.
-                    - Responde sempre em português simples.
+1. TENDÊNCIA
+- Alta, baixa ou lateral.
+- Explica o motivo.
 
-                    Organiza a resposta com títulos claros.
-                    """
+2. ESTRUTURA DO MERCADO
+- Identifica máximos e mínimos.
+- Procura tendências, pullbacks e possíveis reversões.
+
+3. CENÁRIO BUY
+- Existe oportunidade de compra?
+- Possível zona de entrada.
+- Stop Loss.
+- Take Profit.
+- Confirmação necessária.
+
+4. CENÁRIO SELL
+- Existe oportunidade de venda?
+- Possível zona de entrada.
+- Stop Loss.
+- Take Profit.
+- Confirmação necessária.
+
+5. COMPARAÇÃO
+- Compara os cenários BUY e SELL.
+- Indica qual apresenta melhores condições técnicas.
+- Se nenhum for suficientemente claro, explica porquê.
+
+6. DECISÃO FINAL
+Escolhe apenas uma:
+BUY, SELL ou AGUARDAR.
+
+7. JUSTIFICAÇÃO
+Explica claramente a decisão.
+
+REGRAS IMPORTANTES:
+
+- Analisa BUY e SELL independentemente.
+- Não escolhas BUY ou SELL sem evidências.
+- Se a decisão for AGUARDAR, apresenta os dois cenários
+  possíveis quando houver dados suficientes.
+- Não inventes preços, entradas, SL ou TP.
+- Se os preços não forem legíveis, informa isso.
+- Não inventes indicadores que não aparecem no gráfico.
+- Considera suportes, resistências e estrutura do mercado.
+- Não apresentes percentagens de confiança inventadas.
+- Não prometas lucros ou resultados garantidos.
+- Considera o risco dos índices sintéticos.
+- Se faltar informação, explica o que é necessário.
+- Responde sempre em português simples.
+
+A análise deve ser profissional, objetiva e organizada.
+"""
 
                     response = requests.post(
                         "https://openrouter.ai/api/v1/chat/completions",
@@ -184,17 +217,21 @@ if imagem:
 
                 except Exception as e:
 
-                    st.error(f"Erro durante a análise: {e}")
+                    st.error(
+                        f"Erro durante a análise: {e}"
+                    )
 
 st.divider()
 
 st.caption("DONCULLERTRADE47 © 2026")
+
 st.caption(
-    "Análise técnica | Gestão de risco | Inteligência artificial"
+    "Análise técnica | Gestão de risco | "
+    "Inteligência artificial"
 )
 
 st.warning(
-    "Os resultados são análises assistidas por IA, "
-    "não garantias de lucro. Confirma os sinais antes "
+    "As análises são assistidas por IA e não "
+    "garantem lucros. Confirma os sinais antes "
     "de qualquer operação."
-                    )
+)
