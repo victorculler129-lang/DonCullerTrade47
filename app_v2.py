@@ -1,6 +1,6 @@
 import os
-import base64
 import re
+import base64
 from io import BytesIO
 from datetime import datetime, timezone
 
@@ -9,236 +9,146 @@ import streamlit as st
 from PIL import Image
 
 
-# =====================================================
-# DONCULLER-TRADE47 V2
-# AI TRADING CHART ANALYZER
-# =====================================================
+# ==========================================
+# DONCULLER-TRADE47 V3
+# ==========================================
 
 st.set_page_config(
     page_title="DONCULLER-TRADE47",
     page_icon="🦁",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
-
-
-# =====================================================
-# DESIGN
-# =====================================================
 
 st.markdown("""
 <style>
-
 .stApp {
-    background-color: #071321;
+    background: #071321;
     color: #edf3fa;
 }
-
 section[data-testid="stSidebar"] {
-    background-color: #0b1b2d;
-    border-right: 1px solid #1d3550;
+    background: #0b1b2d;
 }
-
 .block-container {
     max-width: 1250px;
-    padding-top: 1.5rem;
 }
-
-.hero {
-    background: linear-gradient(120deg,#102944,#091827);
-    border: 1px solid #23415e;
-    border-radius: 18px;
-    padding: 25px;
-    margin-bottom: 20px;
-}
-
-.hero h1 {
-    color: white;
-    font-size: 2rem;
-}
-
-.hero p {
-    color: #a9bfd4;
-}
-
 .panel {
     background: #0d2033;
-    border: 1px solid #203b55;
+    border: 1px solid #23415e;
     border-radius: 15px;
-    padding: 18px;
-    margin-bottom: 12px;
+    padding: 20px;
+    margin-bottom: 15px;
 }
-
 .buy {
     color: #25d887;
-    font-size: 2.2rem;
-    font-weight: 850;
+    font-size: 32px;
+    font-weight: bold;
 }
-
 .sell {
     color: #ff5c68;
-    font-size: 2.2rem;
-    font-weight: 850;
+    font-size: 32px;
+    font-weight: bold;
 }
-
 .wait {
     color: #ffc857;
-    font-size: 2.2rem;
-    font-weight: 850;
+    font-size: 32px;
+    font-weight: bold;
 }
-
-.muted {
-    color: #a9bfd4;
-}
-
-div.stButton > button {
-    background: #176b50;
-    color: white;
-    border: 1px solid #27966f;
-    border-radius: 10px;
-    min-height: 3rem;
-    font-weight: 750;
-}
-
-div.stButton > button:hover {
-    background: #1b805e;
-    color: white;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
 
-# =====================================================
+# ==========================================
 # HEADER
-# =====================================================
+# ==========================================
 
 st.markdown("""
-<div class="hero">
-    <h1>🦁 DONCULLER-TRADE47</h1>
-    <p>AI CHART ANALYZER · SYNTHETIC & FOREX · V2</p>
+<div class="panel">
+<h1>🦁 DONCULLER-TRADE47</h1>
+<p>AI TRADING CHART ANALYZER · VERSION 3</p>
 </div>
 """, unsafe_allow_html=True)
 
 
-# =====================================================
-# API CONFIGURATION
-# =====================================================
+# ==========================================
+# API
+# ==========================================
 
 API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 MODEL = os.getenv(
     "OPENROUTER_MODEL",
-    "openrouter/free"
+    "nvidia/nemotron-3.5-super-vl:free"
 ).strip()
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
-# =====================================================
+# ==========================================
 # ASSETS
-# =====================================================
+# ==========================================
 
 SYNTHETIC_ASSETS = [
-    "Boom 1000",
-    "Crash 1000",
-    "Boom 500",
-    "Crash 500",
-    "Boom 300",
-    "Crash 300",
-    "Boom 100",
-    "Crash 100",
-    "Boom 50",
-    "Crash 50",
-    "Jump Index 50",
-    "Jump Index",
+    "Boom 1000", "Crash 1000",
+    "Boom 500", "Crash 500",
+    "Boom 300", "Crash 300",
+    "Boom 100", "Crash 100",
+    "Boom 50", "Crash 50",
+    "Jump Index 50", "Jump Index",
     "Step Index"
 ]
 
 FOREX_ASSETS = [
-    "EUR/USD",
-    "GBP/USD",
-    "XAU/USD"
+    "EUR/USD", "GBP/USD", "XAU/USD"
 ]
 
 
-# =====================================================
+# ==========================================
 # SIDEBAR
-# =====================================================
+# ==========================================
 
 with st.sidebar:
 
-    st.header("⚙️ CONFIGURAÇÃO")
+    st.header("CONFIGURAÇÃO")
 
     market = st.radio(
         "Mercado",
-        [
-            "Índices sintéticos",
-            "Forex"
-        ]
+        ["Índices sintéticos", "Forex"]
     )
 
-    if market == "Índices sintéticos":
-        assets = SYNTHETIC_ASSETS
-    else:
-        assets = FOREX_ASSETS
-
-    asset = st.selectbox(
-        "Ativo",
-        assets
+    assets = (
+        SYNTHETIC_ASSETS
+        if market == "Índices sintéticos"
+        else FOREX_ASSETS
     )
+
+    asset = st.selectbox("Ativo", assets)
 
     timeframe = st.selectbox(
         "Timeframe",
-        [
-            "M1",
-            "M5",
-            "M15",
-            "M30",
-            "H1",
-            "H4",
-            "D1"
-        ],
+        ["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
         index=1
     )
 
     platform = st.selectbox(
         "Plataforma",
-        [
-            "Deriv MT5",
-            "TradingView",
-            "Outra"
-        ]
+        ["Deriv MT5", "TradingView", "Outra"]
     )
 
-    st.divider()
-
-    if market == "Índices sintéticos":
-        st.success("Motor: SYNTHETIC AI")
-    else:
-        st.info("Motor: FOREX AI")
-
-    st.caption("DONCULLER-TRADE47 V2")
+    st.caption("DONCULLER-TRADE47 V3")
 
 
-# =====================================================
-# UPLOAD SECTION
-# =====================================================
+# ==========================================
+# SCREENSHOT
+# ==========================================
 
 left, right = st.columns([1.4, 1])
 
 with left:
 
-    st.markdown("""
-    <div class="panel">
-        <h3>📷 GRÁFICO PARA ANÁLISE</h3>
-        <p class="muted">
-        Envia uma captura nítida do gráfico.
-        Procura deixar visíveis as velas,
-        os preços e os indicadores.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel"><h3>GRÁFICO PARA ANÁLISE</h3></div>',
+        unsafe_allow_html=True
+    )
 
     uploaded_file = st.file_uploader(
         "Carregar screenshot",
@@ -247,136 +157,139 @@ with left:
 
     image = None
 
-    if uploaded_file is not None:
+    if uploaded_file:
 
         try:
-
-            image = Image.open(
-                uploaded_file
-            ).convert("RGB")
+            image = Image.open(uploaded_file).convert("RGB")
 
             st.image(
                 image,
-                caption=f"{asset} · {timeframe}",
+                caption=f"{asset} - {timeframe}",
                 use_container_width=True
             )
 
         except Exception:
-
-            st.error(
-                "Não foi possível abrir a imagem."
-            )
+            st.error("Não foi possível abrir a imagem.")
 
 with right:
 
     st.markdown("""
     <div class="panel">
-        <h3>📊 SISTEMA DE ANÁLISE</h3>
-        <p>🟢 BUY — Comprar</p>
-        <p>🔴 SELL — Vender</p>
-        <p>🟡 AGUARDAR — Sem confirmação</p>
-        <hr>
-        <p class="muted">
-        A análise considera estrutura,
-        Price Action e indicadores visíveis.
-        </p>
+    <h3>MOTOR DE ANÁLISE</h3>
+    <p>🟢 BUY - Comprar</p>
+    <p>🔴 SELL - Vender</p>
+    <p>🟡 AGUARDAR - Sem confirmação</p>
+    <hr>
+    <p>Análise visual de velas, indicadores e movimentos.</p>
     </div>
     """, unsafe_allow_html=True)
 
 
-# =====================================================
-# ANALYSIS PROMPT
-# =====================================================
+# ==========================================
+# PROMPT V3
+# ==========================================
 
 def build_prompt():
 
-    if market == "Índices sintéticos":
-
-        market_rules = """
-        Este é um índice sintético da Deriv.
-
-        Identifica corretamente o tipo de ativo.
-
-        Não assumes que um spike vai acontecer
-        apenas porque o gráfico está lateralizado.
-
-        Não inventes ciclos ou padrões.
-        """
-
-    else:
-
-        market_rules = """
-        Este é um instrumento Forex.
-
-        Considera tendência, estrutura,
-        sessões de mercado e Price Action.
-
-        Não inventes notícias económicas
-        nem acontecimentos externos.
-        """
-
-    prompt = f"""
-És o analista técnico da DONCULLER-TRADE47.
+    return f"""
+És o analista técnico da DONCULLER-TRADE47 V3.
 
 ATIVO: {asset}
 MERCADO: {market}
 TIMEFRAME: {timeframe}
 PLATAFORMA: {platform}
 
-{market_rules}
+Analisa cuidadosamente o screenshot.
 
-ANALISA O SCREENSHOT.
+1. LEITURA DAS VELAS
 
-1. Identifica a tendência principal.
-2. Analisa a estrutura do mercado.
-3. Identifica máximos e mínimos.
-4. Analisa Price Action.
-5. Identifica suportes e resistências.
-6. Verifica Zig Zag, se estiver visível.
-7. Verifica Fractals, se estiverem visíveis.
-8. Analisa MACD, se estiver visível.
-9. Analisa RSI, se estiver visível.
-10. Verifica médias móveis, se estiverem visíveis.
+Analisa:
+- Velas de alta e baixa.
+- Corpos e pavios.
+- Sombras superiores e inferiores.
+- Engolfo de alta e baixa.
+- Doji.
+- Pin Bar.
+- Rejeições de preço.
+- Sequências de velas.
+- Força dos compradores e vendedores.
 
-Não inventes valores de indicadores.
+2. INDICADORES
 
-COMPARAÇÃO:
+Analisa quando estiverem visíveis:
 
-Avalia o cenário BUY e o cenário SELL.
+- Zig Zag: topos, fundos e mudanças de direção.
+- Fractals: pontos de reversão.
+- MACD: cruzamentos e força.
+- RSI: força e zonas extremas.
+- Médias móveis: inclinação e cruzamentos.
 
-Escolhe apenas uma direção principal
-quando existir evidência técnica suficiente.
+Se não estiverem visíveis, informa isso.
+Nunca inventes valores.
 
-Não forces uma entrada.
+3. MOVIMENTOS
 
-ENTRADA:
+Identifica:
+- Tendência principal.
+- Impulsos e correções.
+- Máximos e mínimos.
+- Suportes e resistências.
+- Rompimentos e falsos rompimentos.
+- Mudanças de estrutura.
+- Possíveis reversões.
 
-Indica uma zona de entrada futura
-e a condição necessária para ativá-la.
+4. COMPARAÇÃO
 
-STOP LOSS:
+Compara BUY e SELL.
 
-Indica um nível de invalidação técnica.
+Atribui pontuação técnica de 0 a 100
+para cada direção.
 
-TAKE PROFIT:
+As pontuações não são probabilidades
+reais de lucro.
 
-Indica um alvo coerente com a estrutura.
+Escolhe a direção com maior evidência
+quando houver confirmação suficiente.
 
-Se os preços não estiverem legíveis,
-escreve "indeterminável pela imagem".
+Não forces operações.
 
-A pontuação técnica não representa
-uma probabilidade real de lucro.
+5. CENÁRIO BUY
 
-RESPONDE NESTE FORMATO:
+Apresenta:
+
+Entrada futura:
+Condição de ativação:
+Stop Loss:
+Take Profit 1:
+Take Profit 2:
+Risco/retorno:
+
+6. CENÁRIO SELL
+
+Apresenta:
+
+Entrada futura:
+Condição de ativação:
+Stop Loss:
+Take Profit 1:
+Take Profit 2:
+Risco/retorno:
+
+Os preços devem respeitar a estrutura
+e a escala visível do gráfico.
+
+Não inventes preços.
+Se não forem legíveis, informa.
+
+7. RELATÓRIO FINAL
 
 ATIVO:
 TIMEFRAME:
-QUALIDADE DA IMAGEM:
+QUALIDADE DO SCREENSHOT:
 
 TENDÊNCIA:
-ESTRUTURA:
-PRICE ACTION:
+MOVIMENTO ATUAL:
+LEITURA DAS VELAS:
 
 ZIG ZAG:
 FRACTALS:
@@ -390,31 +303,40 @@ RESISTÊNCIA:
 PONTUAÇÃO BUY:
 PONTUAÇÃO SELL:
 
+CENÁRIO BUY:
+ENTRADA FUTURA:
+ATIVAÇÃO:
+SL:
+TP1:
+TP2:
+
+CENÁRIO SELL:
+ENTRADA FUTURA:
+ATIVAÇÃO:
+SL:
+TP1:
+TP2:
+
 SINAL PRINCIPAL: BUY / SELL / AGUARDAR
 
-ENTRADA FUTURA:
-CONDIÇÃO DE ATIVAÇÃO:
-
-STOP LOSS:
-TAKE PROFIT:
-RISCO/RETORNO:
-
-INVALIDAÇÃO:
+DIREÇÃO COM MAIOR FORÇA:
 JUSTIFICAÇÃO:
+O QUE PRECISA ACONTECER PARA ENTRAR:
 
-LIMITAÇÕES:
+REGRAS:
 
-Usa português simples e direto.
-Não prometas resultados.
-Não inventes preços.
+- Nunca respondas apenas AGUARDAR.
+- Quando aguardares, apresenta os dois cenários.
+- Não inventes preços nem indicadores.
+- Não confundas correção com reversão.
+- Usa português simples e direto.
+- Não prometas resultados.
 """
 
-    return prompt
 
-
-# =====================================================
-# OPENROUTER API
-# =====================================================
+# ==========================================
+# IMAGE ANALYSIS
+# ==========================================
 
 def analyze_chart(chart_image, prompt):
 
@@ -423,65 +345,53 @@ def analyze_chart(chart_image, prompt):
     chart_image.save(
         buffer,
         format="JPEG",
-        quality=88
+        quality=90
     )
 
-    encoded_image = base64.b64encode(
+    encoded = base64.b64encode(
         buffer.getvalue()
     ).decode("utf-8")
 
     payload = {
-
         "model": MODEL,
-
         "messages": [
             {
                 "role": "user",
-
                 "content": [
-
                     {
                         "type": "text",
                         "text": prompt
                     },
-
                     {
                         "type": "image_url",
-
                         "image_url": {
-                            "url":
-                            f"data:image/jpeg;base64,{encoded_image}"
+                            "url": (
+                                "data:image/jpeg;base64,"
+                                + encoded
+                            )
                         }
                     }
-
                 ]
             }
         ],
-
         "temperature": 0.1,
-
-        "max_tokens": 1600
+        "max_tokens": 3000
     }
 
     headers = {
-
         "Authorization": f"Bearer {API_KEY}",
-
         "Content-Type": "application/json",
-
         "X-Title": "DONCULLER-TRADE47"
-
     }
 
     response = requests.post(
         API_URL,
         headers=headers,
         json=payload,
-        timeout=120
+        timeout=180
     )
 
     if response.status_code != 200:
-
         raise RuntimeError(
             f"Erro OpenRouter {response.status_code}: "
             f"{response.text[:1000]}"
@@ -492,17 +402,11 @@ def analyze_chart(chart_image, prompt):
     choices = data.get("choices", [])
 
     if not choices:
+        raise RuntimeError("A IA não devolveu resultados.")
 
-        raise RuntimeError(
-            "A IA não devolveu uma resposta."
-        )
-
-    content = choices[0].get(
-        "message", {}
-    ).get("content", "")
+    content = choices[0]["message"].get("content", "")
 
     if isinstance(content, list):
-
         content = "\n".join(
             item.get("text", "")
             for item in content
@@ -510,17 +414,14 @@ def analyze_chart(chart_image, prompt):
         )
 
     if not str(content).strip():
-
-        raise RuntimeError(
-            "A resposta da IA está vazia."
-        )
+        raise RuntimeError("A resposta da IA está vazia.")
 
     return str(content).strip()
 
 
-# =====================================================
-# ANALYSIS BUTTON
-# =====================================================
+# ==========================================
+# ANALYZE BUTTON
+# ==========================================
 
 if st.button(
     "🦁 ANALISAR GRÁFICO",
@@ -531,8 +432,7 @@ if st.button(
     if not API_KEY:
 
         st.error(
-            "A variável OPENROUTER_API_KEY "
-            "não foi encontrada no Render."
+            "OPENROUTER_API_KEY não encontrada no Render."
         )
 
     else:
@@ -540,51 +440,26 @@ if st.button(
         try:
 
             with st.spinner(
-                "A DONCULLER-TRADE47 está a analisar..."
+                "A DONCULLER-TRADE47 está a analisar o gráfico..."
             ):
-
-                prompt = build_prompt()
 
                 result = analyze_chart(
                     image,
-                    prompt
+                    build_prompt()
                 )
 
                 st.session_state["last_result"] = result
-
                 st.session_state["last_asset"] = asset
-
                 st.session_state["last_timeframe"] = timeframe
-
-                st.session_state["last_market"] = market
-
-                st.session_state["last_timestamp"] = (
-                    datetime.now(timezone.utc).isoformat()
-                )
-
-        except requests.exceptions.Timeout:
-
-            st.error(
-                "A análise demorou demasiado tempo. "
-                "Tenta novamente."
-            )
-
-        except requests.exceptions.RequestException as error:
-
-            st.error(
-                f"Erro de ligação: {error}"
-            )
 
         except Exception as error:
 
-            st.error(
-                f"Erro durante a análise: {error}"
-            )
+            st.error(f"Erro na análise: {error}")
 
 
-# =====================================================
+# ==========================================
 # RESULTS
-# =====================================================
+# ==========================================
 
 if "last_result" in st.session_state:
 
@@ -592,78 +467,68 @@ if "last_result" in st.session_state:
 
     st.divider()
 
-    st.subheader("📊 RELATÓRIO DE ANÁLISE")
+    st.subheader("RELATÓRIO DE ANÁLISE")
 
     st.caption(
-        f"Ativo: {st.session_state['last_asset']} "
-        f"| Timeframe: {st.session_state['last_timeframe']} "
-        f"| Mercado: {st.session_state['last_market']}"
+        f"{st.session_state['last_asset']} | "
+        f"{st.session_state['last_timeframe']}"
     )
 
-    # Identifica a linha do sinal principal
-    signal_match = re.search(
+    match = re.search(
         r"SINAL PRINCIPAL\s*:\s*(BUY|SELL|AGUARDAR)",
         result,
         re.IGNORECASE
     )
 
     signal = (
-        signal_match.group(1).upper()
-        if signal_match
+        match.group(1).upper()
+        if match
         else "AGUARDAR"
     )
 
     if signal == "BUY":
 
-        st.markdown("""
-        <div class="panel">
-            <div class="buy">🟢 BUY</div>
-            <p>Possível oportunidade de compra.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel buy">🟢 BUY</div>',
+            unsafe_allow_html=True
+        )
 
     elif signal == "SELL":
 
-        st.markdown("""
-        <div class="panel">
-            <div class="sell">🔴 SELL</div>
-            <p>Possível oportunidade de venda.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel sell">🔴 SELL</div>',
+            unsafe_allow_html=True
+        )
 
     else:
 
-        st.markdown("""
-        <div class="panel">
-            <div class="wait">🟡 AGUARDAR</div>
-            <p>Sem confirmação técnica suficiente.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel wait">🟡 AGUARDAR</div>',
+            unsafe_allow_html=True
+        )
 
     st.markdown(result)
 
     st.download_button(
-        label="⬇️ DESCARREGAR RELATÓRIO",
+        "DESCARREGAR RELATÓRIO",
         data=result,
-        file_name="DonCullerTrade47_relatorio.txt",
+        file_name="DonCullerTrade47_V3.txt",
         mime="text/plain"
     )
 
 
-# =====================================================
+# ==========================================
 # FOOTER
-# =====================================================
+# ==========================================
 
 st.divider()
 
-st.caption(
-    "DONCULLER-TRADE47 · AI CHART ANALYZER · V2"
-)
+st.caption("DONCULLER-TRADE47 V3")
 
 st.warning(
-    "Esta versão analisa screenshots. "
-    "Ainda não recebe cotações em tempo real, "
-    "não calcula indicadores a partir de dados OHLC "
+    "A análise é feita a partir de screenshots. "
+    "O sistema ainda não recebe cotações em tempo real, "
+    "não calcula indicadores diretamente de dados OHLC "
     "e não executa operações. "
-    "Testa todos os sinais em conta Demo."
+    "Testa sempre em conta Demo."
 )
