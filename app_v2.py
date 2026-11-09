@@ -6,11 +6,11 @@ from datetime import datetime
 
 import requests
 import streamlit as st
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
-# ==========================================
-# DONCULLER-TRADE47 V8.0
-# ==========================================
+# =====================================================
+# DONCULLER-TRADE47 V9.0
+# =====================================================
 
 st.set_page_config(
     page_title="DONCULLER-TRADE47",
@@ -19,6 +19,7 @@ st.set_page_config(
 )
 
 API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+
 MODEL = os.getenv(
     "OPENROUTER_MODEL",
     "nvidia/nemotron-3.5-super-vl:free"
@@ -26,24 +27,25 @@ MODEL = os.getenv(
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# ==========================================
-# DESIGN
-# ==========================================
+# =====================================================
+# INTERFACE
+# =====================================================
 
 st.markdown("""
 <style>
+
 .stApp {
-    background: #071321;
+    background-color: #071321;
     color: #edf3fa;
 }
 
 .block-container {
     max-width: 1150px;
-    padding-top: 1.5rem;
+    padding-top: 1.2rem;
 }
 
 section[data-testid="stSidebar"] {
-    background: #0b1b2d;
+    background-color: #0b1b2d;
 }
 
 .header {
@@ -64,24 +66,24 @@ section[data-testid="stSidebar"] {
     border: 1px solid #29445e;
     border-radius: 14px;
     padding: 18px;
-    margin: 10px 0;
+    margin: 12px 0;
 }
 
 .buy {
     color: #28dc91;
-    font-size: 35px;
+    font-size: 36px;
     font-weight: 900;
 }
 
 .sell {
     color: #ff6675;
-    font-size: 35px;
+    font-size: 36px;
     font-weight: 900;
 }
 
 .wait {
     color: #ffd166;
-    font-size: 35px;
+    font-size: 36px;
     font-weight: 900;
 }
 
@@ -104,19 +106,22 @@ div.stButton > button:hover {
     background: #208d65;
     color: white;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
+
 st.markdown("""
 <div class="header">
-<h1>🦁 DONCULLER-TRADE47</h1>
-<p>AI TRADING CHART ANALYZER · VERSION 8.0</p>
+    <h1>🦁 DONCULLER-TRADE47</h1>
+    <p>AI TRADING CHART ANALYZER · V9.0</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# CONFIGURAÇÃO
-# ==========================================
+
+# =====================================================
+# CONFIGURAÇÃO DOS ATIVOS
+# =====================================================
 
 with st.sidebar:
 
@@ -169,94 +174,101 @@ with st.sidebar:
     st.divider()
 
     st.caption("Motor de análise visual")
-    st.caption("DONCULLER-TRADE47 V8.0")
+    st.caption("Modelo: " + MODEL)
 
-# ==========================================
-# PROMPT DE ANÁLISE
-# ==========================================
+
+# =====================================================
+# PROMPT PRINCIPAL
+# =====================================================
 
 def create_prompt():
 
     return f"""
 És o analista técnico profissional da DONCULLER-TRADE47.
 
-Analisa cuidadosamente o screenshot enviado.
+Analisa a imagem do gráfico enviada pelo utilizador.
 
 INFORMAÇÕES:
+
 Ativo: {asset}
 Mercado: {market}
 Timeframe: {timeframe}
 Plataforma: {platform}
 
-O TEU OBJETIVO:
+OBJETIVO:
 
-Encontrar a melhor oportunidade futura de BUY ou SELL.
+Encontrar a melhor oportunidade futura entre BUY e SELL.
 
 Não favoreças nenhuma direção.
-Analisa BUY e SELL com os mesmos critérios.
+Compara os dois cenários utilizando os mesmos critérios.
 
-ANÁLISE TÉCNICA OBRIGATÓRIA:
+ANÁLISE TÉCNICA:
 
 1. Tendência principal.
-2. Estrutura de mercado.
+2. Estrutura do mercado.
 3. Topos e fundos.
 4. Suportes e resistências.
 5. Velas e padrões de reversão.
 6. Rompimentos e retestes.
-7. Zig Zag, se visível.
-8. Fractals, se visíveis.
-9. MACD, se visível.
-10. RSI e médias móveis, se visíveis.
+7. Zig Zag, se estiver visível.
+8. Fractals, se estiverem visíveis.
+9. MACD, se estiver visível.
+10. RSI, se estiver visível.
+11. Médias móveis, se estiverem visíveis.
 
 Não inventes indicadores que não aparecem na imagem.
 
-ANÁLISE BUY:
+CENÁRIO BUY:
 
 Procura:
-- Recuperação de suporte.
-- Fundo mais alto.
+- Rejeição de suporte.
+- Fundos ascendentes.
+- Recuperação de estrutura.
 - Rompimento de resistência.
 - Reteste positivo.
 - Fractal inferior confirmado.
-- Confirmação de MACD, se visível.
+- Confirmação do MACD, se visível.
 
-ANÁLISE SELL:
+CENÁRIO SELL:
 
 Procura:
 - Rejeição de resistência.
-- Topo mais baixo.
+- Topos descendentes.
 - Perda de suporte.
+- Rompimento descendente.
 - Reteste negativo.
 - Fractal superior confirmado.
-- Confirmação de MACD, se visível.
+- Confirmação do MACD, se visível.
 
 ÍNDICES SINTÉTICOS:
 
 Não escolhas BUY ou SELL apenas pelo nome Boom, Crash,
-Jump ou Step. Analisa o comportamento real do gráfico.
+Jump ou Step.
+
+Analisa o comportamento efetivamente visível.
 
 DECISÃO:
 
-Compara a força dos dois cenários.
+Compara a força dos cenários BUY e SELL.
 
 Se BUY tiver melhores confirmações, escolhe BUY.
 
 Se SELL tiver melhores confirmações, escolhe SELL.
 
-Se nenhum cenário tiver confirmação suficiente, escolhe AGUARDAR.
+Se não existir uma configuração tecnicamente válida,
+escolhe AGUARDAR.
 
 Não escolhas sempre AGUARDAR.
 Não escolhas sempre SELL.
 Não escolhas sempre BUY.
 
-A confiança é uma avaliação técnica subjetiva, não uma
-probabilidade garantida de lucro.
+A confiança representa uma avaliação técnica subjetiva,
+não uma probabilidade garantida de lucro.
 
 ENTRADA:
 
-Apresenta uma entrada específica ou uma zona de entrada.
-Se necessário, utiliza uma condição de ativação, como
-fecho de vela acima ou abaixo de determinado nível.
+Indica preço ou zona de entrada quando a escala estiver legível.
+Também podes indicar uma entrada condicional após confirmação.
 
 STOP LOSS:
 
@@ -264,15 +276,12 @@ Coloca o SL onde a estrutura da operação fica invalidada.
 
 TAKE PROFIT:
 
-Apresenta TP1 e TP2 em níveis tecnicamente plausíveis.
-
-IMPORTANTE:
+Apresenta TP1 e TP2 tecnicamente plausíveis.
 
 Não inventes preços.
-Se a escala de preços não estiver legível, escreve
-"Preço não legível na imagem".
+Se não conseguires ler a escala, escreve "PREÇO NÃO LEGÍVEL".
 
-FORMATO DA RESPOSTA:
+FORMATO OBRIGATÓRIO:
 
 ATIVO:
 TIMEFRAME:
@@ -301,6 +310,7 @@ ZIG ZAG:
 FRACTALS:
 MACD:
 RSI:
+MÉDIAS MÓVEIS:
 
 CONFIRMAÇÕES:
 1.
@@ -313,13 +323,15 @@ INVALIDAÇÃO:
 RESUMO OPERACIONAL:
 
 Responde em português simples.
-Evita explicações longas.
+Sê direto e profissional.
+Evita explicações desnecessárias.
 Não acrescentes texto fora do relatório.
 """
 
-# ==========================================
-# PREPARAÇÃO DA IMAGEM
-# ==========================================
+
+# =====================================================
+# PREPARAR IMAGEM
+# =====================================================
 
 def prepare_image(uploaded):
 
@@ -334,19 +346,29 @@ def prepare_image(uploaded):
         image = image.convert("RGB")
 
         if image.width < 250 or image.height < 180:
-            raise ValueError("Screenshot demasiado pequeno.")
 
-        image.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
+            raise ValueError(
+                "Screenshot demasiado pequeno."
+            )
+
+        image.thumbnail(
+            (1800, 1800),
+            Image.Resampling.LANCZOS
+        )
 
         return image
 
-    except Exception as error:
+    except (UnidentifiedImageError, OSError, ValueError) as error:
 
         raise ValueError(
             "Não foi possível abrir a imagem. "
-            "Envia outro screenshot."
+            "Envia um screenshot PNG ou JPG válido."
         ) from error
 
+
+# =====================================================
+# CONVERTER IMAGEM
+# =====================================================
 
 def encode_image(image):
 
@@ -365,9 +387,77 @@ def encode_image(image):
 
     return "data:image/jpeg;base64," + encoded
 
-# ==========================================
-# INTELIGÊNCIA ARTIFICIAL
-# ==========================================
+
+# =====================================================
+# EXTRAIR RESPOSTA DA IA
+# =====================================================
+
+def extract_response(data):
+
+    choices = data.get("choices")
+
+    if not choices:
+
+        raise RuntimeError(
+            "O modelo não devolveu resultados: "
+            + str(data)[:1200]
+        )
+
+    message = choices[0].get("message", {})
+
+    content = message.get("content")
+
+    if isinstance(content, str):
+
+        if content.strip():
+
+            return content.strip()
+
+    if isinstance(content, list):
+
+        parts = []
+
+        for item in content:
+
+            if isinstance(item, str):
+
+                parts.append(item)
+
+            elif isinstance(item, dict):
+
+                text_part = item.get("text")
+
+                if text_part:
+
+                    parts.append(text_part)
+
+        result = "\n".join(parts).strip()
+
+        if result:
+
+            return result
+
+    refusal = message.get("refusal")
+
+    if refusal:
+
+        raise RuntimeError(
+            "O modelo recusou a análise: " + str(refusal)
+        )
+
+    finish_reason = choices[0].get("finish_reason")
+
+    raise RuntimeError(
+        "O modelo não enviou texto utilizável. "
+        "Finalização: " + str(finish_reason)
+        + ". Resposta técnica: "
+        + str(message)[:1200]
+    )
+
+
+# =====================================================
+# ANÁLISE DO GRÁFICO
+# =====================================================
 
 def analyze_chart(image):
 
@@ -386,6 +476,7 @@ def analyze_chart(image):
         "messages": [
 
             {
+
                 "role": "user",
 
                 "content": [
@@ -403,15 +494,17 @@ def analyze_chart(image):
                     }
 
                 ]
+
             }
 
         ],
 
         "temperature": 0.15,
 
-        "max_tokens": 2200,
+        "max_tokens": 2500,
 
         "stream": False
+
     }
 
     headers = {
@@ -444,60 +537,45 @@ def analyze_chart(image):
     except requests.RequestException as error:
 
         raise RuntimeError(
-            f"Erro de ligação: {error}"
-        )
-
-    if not response.ok:
-
-        try:
-
-            data = response.json()
-
-            detail = data.get(
-                "error", {}
-            ).get(
-                "message",
-                response.text[:600]
-            )
-
-        except Exception:
-
-            detail = response.text[:600]
-
-        raise RuntimeError(
-            f"OpenRouter ({response.status_code}): {detail}"
+            "Erro de ligação ao OpenRouter: " + str(error)
         )
 
     try:
 
         data = response.json()
 
-        content = data["choices"][0]["message"]["content"]
-
-        if isinstance(content, list):
-
-            content = "\n".join(
-                item.get("text", "")
-                for item in content
-                if isinstance(item, dict)
-                and item.get("type") in ["text", "output_text"]
-            )
-
-        if not content or not str(content).strip():
-
-            raise ValueError("Resposta vazia.")
-
-        return str(content).strip()
-
-    except Exception as error:
+    except ValueError:
 
         raise RuntimeError(
-            "O modelo devolveu uma resposta inválida."
-        ) from error
+            "Resposta inválida do servidor: "
+            + response.text[:1000]
+        )
 
-# ==========================================
-# IDENTIFICAR DIREÇÃO
-# ==========================================
+    if not response.ok:
+
+        error = data.get("error", {})
+
+        if isinstance(error, dict):
+
+            detail = error.get(
+                "message",
+                str(error)
+            )
+
+        else:
+
+            detail = str(error)
+
+        raise RuntimeError(
+            f"OpenRouter HTTP {response.status_code}: {detail}"
+        )
+
+    return extract_response(data)
+
+
+# =====================================================
+# IDENTIFICAR DECISÃO
+# =====================================================
 
 def get_direction(report):
 
@@ -512,9 +590,10 @@ def get_direction(report):
 
     return "INDEFINIDA"
 
-# ==========================================
-# INTERFACE PRINCIPAL
-# ==========================================
+
+# =====================================================
+# CARREGAR SCREENSHOT
+# =====================================================
 
 st.subheader("📷 CARREGAR GRÁFICO")
 
@@ -529,7 +608,10 @@ if uploaded:
 
     if uploaded.size > 8 * 1024 * 1024:
 
-        st.error("A imagem ultrapassa 8 MB.")
+        st.error(
+            "A imagem ultrapassa 8 MB. "
+            "Envia uma imagem mais leve."
+        )
 
     else:
 
@@ -547,6 +629,11 @@ if uploaded:
 
             st.error(str(error))
 
+
+# =====================================================
+# EXECUTAR ANÁLISE
+# =====================================================
+
 st.divider()
 
 if st.button(
@@ -558,7 +645,7 @@ if st.button(
     try:
 
         with st.spinner(
-            "A analisar estrutura, indicadores e oportunidades..."
+            "A analisar o gráfico e a comparar BUY com SELL..."
         ):
 
             result = analyze_chart(image)
@@ -567,17 +654,22 @@ if st.button(
 
         st.session_state["direction"] = get_direction(result)
 
-        st.session_state["analysis_time"] = datetime.now().strftime(
-            "%d/%m/%Y %H:%M"
+        st.session_state["analysis_time"] = (
+            datetime.now().strftime("%d/%m/%Y %H:%M")
         )
+
+        st.session_state["analysis_asset"] = asset
+
+        st.session_state["analysis_timeframe"] = timeframe
 
     except Exception as error:
 
         st.error(str(error))
 
-# ==========================================
-# RESULTADO
-# ==========================================
+
+# =====================================================
+# MOSTRAR RESULTADO
+# =====================================================
 
 if "report" in st.session_state:
 
@@ -590,7 +682,10 @@ if "report" in st.session_state:
     st.subheader("📊 RESULTADO DA ANÁLISE")
 
     st.caption(
-        "Análise realizada em: "
+        st.session_state.get("analysis_asset", "")
+        + " | "
+        + st.session_state.get("analysis_timeframe", "")
+        + " | "
         + st.session_state["analysis_time"]
     )
 
@@ -618,7 +713,7 @@ if "report" in st.session_state:
     else:
 
         st.warning(
-            "Não foi possível identificar a direção final. "
+            "Não foi possível reconhecer a decisão final. "
             "Não uses este relatório como sinal."
         )
 
@@ -626,20 +721,30 @@ if "report" in st.session_state:
 
     st.download_button(
         "⬇️ DESCARREGAR RELATÓRIO",
+
         data=report,
+
         file_name="DonCullerTrade47_analise.txt",
+
         mime="text/plain",
+
         use_container_width=True
     )
+
+
+# =====================================================
+# RODAPÉ
+# =====================================================
 
 st.divider()
 
 st.caption(
-    "DONCULLER-TRADE47 V8.0 | AI TRADING ANALYZER"
+    "DONCULLER-TRADE47 V9.0 | AI TRADING CHART ANALYZER"
 )
 
 st.warning(
-    "Ferramenta de análise visual. Não executa operações "
-    "nem garante lucros. Confirma sempre os níveis no MT5 "
+    "A aplicação analisa apenas screenshots. "
+    "Não recebe cotações em tempo real, não executa operações "
+    "e não garante lucros. Confirma os níveis no MT5 "
     "e testa primeiro em conta Demo."
-    )
+)
