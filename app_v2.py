@@ -9,7 +9,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 # =====================================================
-# DONCULLER-TRADE47 V9.0
+# DONCULLER-TRADE47 V10.0
 # =====================================================
 
 st.set_page_config(
@@ -27,13 +27,13 @@ MODEL = os.getenv(
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+
 # =====================================================
 # INTERFACE
 # =====================================================
 
 st.markdown("""
 <style>
-
 .stApp {
     background-color: #071321;
     color: #edf3fa;
@@ -106,7 +106,6 @@ div.stButton > button:hover {
     background: #208d65;
     color: white;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -114,13 +113,13 @@ div.stButton > button:hover {
 st.markdown("""
 <div class="header">
     <h1>🦁 DONCULLER-TRADE47</h1>
-    <p>AI TRADING CHART ANALYZER · V9.0</p>
+    <p>AI TRADING CHART ANALYZER · V10.0</p>
 </div>
 """, unsafe_allow_html=True)
 
 
 # =====================================================
-# CONFIGURAÇÃO DOS ATIVOS
+# CONFIGURAÇÃO
 # =====================================================
 
 with st.sidebar:
@@ -135,16 +134,11 @@ with st.sidebar:
     if market == "Índices Sintéticos":
 
         assets = [
-            "Boom 1000",
-            "Crash 1000",
-            "Boom 500",
-            "Crash 500",
-            "Boom 300",
-            "Crash 300",
-            "Boom 100",
-            "Crash 100",
-            "Boom 50",
-            "Crash 50",
+            "Boom 1000", "Crash 1000",
+            "Boom 500", "Crash 500",
+            "Boom 300", "Crash 300",
+            "Boom 100", "Crash 100",
+            "Boom 50", "Crash 50",
             "Jump Index 50",
             "Jump Index",
             "Step Index"
@@ -175,111 +169,67 @@ with st.sidebar:
 
     st.caption("Motor de análise visual")
     st.caption("Modelo: " + MODEL)
+    st.caption("Versão: V10.0")
 
 
 # =====================================================
-# PROMPT PRINCIPAL
+# PROMPT DE ANÁLISE
 # =====================================================
 
 def create_prompt():
 
     return f"""
-És o analista técnico profissional da DONCULLER-TRADE47.
+És o motor de análise técnica da DONCULLER-TRADE47.
 
-Analisa a imagem do gráfico enviada pelo utilizador.
+Analisa cuidadosamente o screenshot enviado.
 
-INFORMAÇÕES:
-
+DADOS:
 Ativo: {asset}
 Mercado: {market}
 Timeframe: {timeframe}
 Plataforma: {platform}
 
 OBJETIVO:
+Encontrar a melhor oportunidade futura de BUY ou SELL.
 
-Encontrar a melhor oportunidade futura entre BUY e SELL.
-
+COMPARAÇÃO:
+Avalia BUY e SELL com os mesmos critérios.
 Não favoreças nenhuma direção.
-Compara os dois cenários utilizando os mesmos critérios.
+Não escolhas sempre AGUARDAR.
+Não inventes sinais para satisfazer o utilizador.
 
-ANÁLISE TÉCNICA:
+CRITÉRIOS:
+- Tendência e estrutura de mercado.
+- Topos e fundos.
+- Suportes e resistências.
+- Velas e padrões.
+- Rompimentos e retestes.
+- Zig Zag, se visível.
+- Fractals, se visíveis.
+- MACD, se visível.
+- RSI, se visível.
+- Médias móveis, se visíveis.
 
-1. Tendência principal.
-2. Estrutura do mercado.
-3. Topos e fundos.
-4. Suportes e resistências.
-5. Velas e padrões de reversão.
-6. Rompimentos e retestes.
-7. Zig Zag, se estiver visível.
-8. Fractals, se estiverem visíveis.
-9. MACD, se estiver visível.
-10. RSI, se estiver visível.
-11. Médias móveis, se estiverem visíveis.
-
-Não inventes indicadores que não aparecem na imagem.
-
-CENÁRIO BUY:
-
-Procura:
-- Rejeição de suporte.
-- Fundos ascendentes.
-- Recuperação de estrutura.
-- Rompimento de resistência.
-- Reteste positivo.
-- Fractal inferior confirmado.
-- Confirmação do MACD, se visível.
-
-CENÁRIO SELL:
-
-Procura:
-- Rejeição de resistência.
-- Topos descendentes.
-- Perda de suporte.
-- Rompimento descendente.
-- Reteste negativo.
-- Fractal superior confirmado.
-- Confirmação do MACD, se visível.
-
-ÍNDICES SINTÉTICOS:
-
-Não escolhas BUY ou SELL apenas pelo nome Boom, Crash,
-Jump ou Step.
-
-Analisa o comportamento efetivamente visível.
+Não afirmes que um indicador está confirmado se não estiver visível.
+Não inventes preços nem indicadores.
 
 DECISÃO:
-
-Compara a força dos cenários BUY e SELL.
-
-Se BUY tiver melhores confirmações, escolhe BUY.
-
-Se SELL tiver melhores confirmações, escolhe SELL.
-
-Se não existir uma configuração tecnicamente válida,
-escolhe AGUARDAR.
-
-Não escolhas sempre AGUARDAR.
-Não escolhas sempre SELL.
-Não escolhas sempre BUY.
-
-A confiança representa uma avaliação técnica subjetiva,
-não uma probabilidade garantida de lucro.
+Escolhe BUY quando as confirmações compradoras forem superiores.
+Escolhe SELL quando as confirmações vendedoras forem superiores.
+Escolhe AGUARDAR quando não existir oportunidade suficientemente clara.
 
 ENTRADA:
+Indica uma zona de entrada ou uma entrada condicional.
+Considera a escala de preços visível.
 
-Indica preço ou zona de entrada quando a escala estiver legível.
-Também podes indicar uma entrada condicional após confirmação.
+SL:
+Coloca o Stop Loss depois do nível que invalida a operação.
 
-STOP LOSS:
+TP:
+Apresenta dois objetivos tecnicamente plausíveis.
 
-Coloca o SL onde a estrutura da operação fica invalidada.
-
-TAKE PROFIT:
-
-Apresenta TP1 e TP2 tecnicamente plausíveis.
-
-Não inventes preços.
-Se não conseguires ler a escala, escreve "PREÇO NÃO LEGÍVEL".
+Se os preços não forem legíveis, escreve PREÇO NÃO LEGÍVEL.
+Nunca inventes valores.
 
 FORMATO OBRIGATÓRIO:
 
@@ -290,7 +240,6 @@ DIREÇÃO FINAL: BUY / SELL / AGUARDAR
 
 FORÇA BUY: __/100
 FORÇA SELL: __/100
-
 CONFIANÇA DA ANÁLISE: __/100
 
 ENTRADA:
@@ -298,7 +247,6 @@ ATIVAÇÃO:
 STOP LOSS:
 TAKE PROFIT 1:
 TAKE PROFIT 2:
-
 RISCO/RETORNO:
 
 TENDÊNCIA:
@@ -323,9 +271,9 @@ INVALIDAÇÃO:
 RESUMO OPERACIONAL:
 
 Responde em português simples.
-Sê direto e profissional.
-Evita explicações desnecessárias.
-Não acrescentes texto fora do relatório.
+Sê direto, técnico e objetivo.
+Não escrevas raciocínio interno.
+Entrega apenas o relatório final.
 """
 
 
@@ -340,19 +288,14 @@ def prepare_image(uploaded):
         uploaded.seek(0)
 
         image = Image.open(uploaded)
-
         image = ImageOps.exif_transpose(image)
-
         image = image.convert("RGB")
 
         if image.width < 250 or image.height < 180:
-
-            raise ValueError(
-                "Screenshot demasiado pequeno."
-            )
+            raise ValueError("Screenshot demasiado pequeno.")
 
         image.thumbnail(
-            (1800, 1800),
+            (1600, 1600),
             Image.Resampling.LANCZOS
         )
 
@@ -367,7 +310,7 @@ def prepare_image(uploaded):
 
 
 # =====================================================
-# CONVERTER IMAGEM
+# CODIFICAR IMAGEM
 # =====================================================
 
 def encode_image(image):
@@ -377,7 +320,7 @@ def encode_image(image):
     image.save(
         buffer,
         format="JPEG",
-        quality=90,
+        quality=85,
         optimize=True
     )
 
@@ -389,29 +332,29 @@ def encode_image(image):
 
 
 # =====================================================
-# EXTRAIR RESPOSTA DA IA
+# EXTRAIR RESPOSTA
 # =====================================================
 
 def extract_response(data):
 
-    choices = data.get("choices")
+    choices = data.get("choices", [])
 
     if not choices:
 
+        error = data.get("error", {})
+
         raise RuntimeError(
             "O modelo não devolveu resultados: "
-            + str(data)[:1200]
+            + str(error or data)[:1500]
         )
 
-    message = choices[0].get("message", {})
+    choice = choices[0]
+    message = choice.get("message", {})
 
     content = message.get("content")
 
-    if isinstance(content, str):
-
-        if content.strip():
-
-            return content.strip()
+    if isinstance(content, str) and content.strip():
+        return content.strip()
 
     if isinstance(content, list):
 
@@ -420,7 +363,6 @@ def extract_response(data):
         for item in content:
 
             if isinstance(item, str):
-
                 parts.append(item)
 
             elif isinstance(item, dict):
@@ -428,35 +370,43 @@ def extract_response(data):
                 text_part = item.get("text")
 
                 if text_part:
-
-                    parts.append(text_part)
+                    parts.append(str(text_part))
 
         result = "\n".join(parts).strip()
 
         if result:
-
             return result
 
     refusal = message.get("refusal")
 
     if refusal:
-
         raise RuntimeError(
             "O modelo recusou a análise: " + str(refusal)
         )
 
-    finish_reason = choices[0].get("finish_reason")
+    finish_reason = choice.get("finish_reason")
+
+    reasoning = message.get("reasoning")
+
+    if finish_reason == "length":
+
+        raise RuntimeError(
+            "O modelo atingiu o limite de geração sem terminar "
+            "o relatório. O raciocínio foi desativado na V10.0, "
+            "mas o fornecedor ainda pode estar a limitar a resposta. "
+            "Tenta novamente."
+        )
 
     raise RuntimeError(
-        "O modelo não enviou texto utilizável. "
+        "Resposta vazia do modelo. "
         "Finalização: " + str(finish_reason)
-        + ". Resposta técnica: "
-        + str(message)[:1200]
+        + ". Raciocínio recebido: "
+        + str(reasoning)[:300]
     )
 
 
 # =====================================================
-# ANÁLISE DO GRÁFICO
+# ANALISAR GRÁFICO
 # =====================================================
 
 def analyze_chart(image):
@@ -474,9 +424,7 @@ def analyze_chart(image):
         "model": MODEL,
 
         "messages": [
-
             {
-
                 "role": "user",
 
                 "content": [
@@ -494,14 +442,14 @@ def analyze_chart(image):
                     }
 
                 ]
-
             }
-
         ],
 
-        "temperature": 0.15,
+        "temperature": 0.3,
 
-        "max_tokens": 2500,
+        "max_tokens": 4096,
+
+        "reasoning_effort": "none",
 
         "stream": False
 
@@ -531,7 +479,8 @@ def analyze_chart(image):
     except requests.Timeout:
 
         raise RuntimeError(
-            "O modelo demorou demasiado. Tenta novamente."
+            "O modelo demorou demasiado. "
+            "Verifica a ligação e tenta novamente."
         )
 
     except requests.RequestException as error:
@@ -547,7 +496,7 @@ def analyze_chart(image):
     except ValueError:
 
         raise RuntimeError(
-            "Resposta inválida do servidor: "
+            "O servidor devolveu uma resposta inválida: "
             + response.text[:1000]
         )
 
@@ -556,14 +505,8 @@ def analyze_chart(image):
         error = data.get("error", {})
 
         if isinstance(error, dict):
-
-            detail = error.get(
-                "message",
-                str(error)
-            )
-
+            detail = error.get("message", str(error))
         else:
-
             detail = str(error)
 
         raise RuntimeError(
@@ -574,7 +517,7 @@ def analyze_chart(image):
 
 
 # =====================================================
-# IDENTIFICAR DECISÃO
+# IDENTIFICAR DIREÇÃO
 # =====================================================
 
 def get_direction(report):
@@ -585,7 +528,6 @@ def get_direction(report):
     )
 
     if match:
-
         return match.group(1).upper()
 
     return "INDEFINIDA"
@@ -645,21 +587,21 @@ if st.button(
     try:
 
         with st.spinner(
-            "A analisar o gráfico e a comparar BUY com SELL..."
+            "A IA está a analisar a imagem e a comparar BUY e SELL..."
         ):
 
             result = analyze_chart(image)
 
-        st.session_state["report"] = result
+        direction = get_direction(result)
 
-        st.session_state["direction"] = get_direction(result)
+        st.session_state["report"] = result
+        st.session_state["direction"] = direction
 
         st.session_state["analysis_time"] = (
             datetime.now().strftime("%d/%m/%Y %H:%M")
         )
 
         st.session_state["analysis_asset"] = asset
-
         st.session_state["analysis_timeframe"] = timeframe
 
     except Exception as error:
@@ -674,7 +616,6 @@ if st.button(
 if "report" in st.session_state:
 
     report = st.session_state["report"]
-
     direction = st.session_state["direction"]
 
     st.divider()
@@ -686,7 +627,7 @@ if "report" in st.session_state:
         + " | "
         + st.session_state.get("analysis_timeframe", "")
         + " | "
-        + st.session_state["analysis_time"]
+        + st.session_state.get("analysis_time", "")
     )
 
     if direction == "BUY":
@@ -713,7 +654,7 @@ if "report" in st.session_state:
     else:
 
         st.warning(
-            "Não foi possível reconhecer a decisão final. "
+            "Não foi possível reconhecer a direção. "
             "Não uses este relatório como sinal."
         )
 
@@ -721,13 +662,9 @@ if "report" in st.session_state:
 
     st.download_button(
         "⬇️ DESCARREGAR RELATÓRIO",
-
         data=report,
-
         file_name="DonCullerTrade47_analise.txt",
-
         mime="text/plain",
-
         use_container_width=True
     )
 
@@ -739,12 +676,12 @@ if "report" in st.session_state:
 st.divider()
 
 st.caption(
-    "DONCULLER-TRADE47 V9.0 | AI TRADING CHART ANALYZER"
+    "DONCULLER-TRADE47 V10.0 | AI TRADING CHART ANALYZER"
 )
 
 st.warning(
-    "A aplicação analisa apenas screenshots. "
+    "A aplicação analisa screenshots. "
     "Não recebe cotações em tempo real, não executa operações "
-    "e não garante lucros. Confirma os níveis no MT5 "
+    "e não garante lucros. Confirma sempre os níveis no MT5 "
     "e testa primeiro em conta Demo."
 )
