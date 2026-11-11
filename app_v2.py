@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import os
 import base64
-import json
 from io import BytesIO
 from PIL import Image, ImageOps
 
@@ -175,16 +174,23 @@ else:
 # =====================================================
 
 def image_to_base64(img):
+
     buffer = BytesIO()
 
+    # Trabalhar numa cópia para preservar a imagem original
+    img = img.copy()
     img.thumbnail((1600, 1600))
-    img.save(buffer, format="JPEG", quality=88)
 
-    encoded = base64.b64encode(
+    img.save(
+        buffer,
+        format="JPEG",
+        quality=88,
+        optimize=True
+    )
+
+    return base64.b64encode(
         buffer.getvalue()
     ).decode("utf-8")
-
-    return encoded
 
 
 # =====================================================
@@ -236,6 +242,18 @@ Se o preço não estiver legível, informa isso.
 Não afirmes que calculaste indicadores sem dados suficientes.
 Não prometas lucros nem percentagens de acerto.
 
+As probabilidades devem refletir a comparação técnica entre
+BUY e SELL. Não inventes precisão estatística.
+
+Para BUY, o Stop Loss deve ficar abaixo da entrada
+e o Take Profit acima da entrada.
+
+Para SELL, o Stop Loss deve ficar acima da entrada
+e o Take Profit abaixo da entrada.
+
+Não apresentes uma relação risco/retorno se os preços
+não forem legíveis ou coerentes.
+
 FORMATO OBRIGATÓRIO DA RESPOSTA:
 
 DECISÃO: BUY / SELL / AGUARDAR
@@ -286,8 +304,75 @@ Diz exatamente o que o trader deve esperar ou fazer.
 As probabilidades são estimativas técnicas, não garantias.
 Se não houver dados suficientes para definir preços,
 indica claramente essa limitação.
+
 Responde em português simples e operacional.
 """
+
+
+# =====================================================
+# EXTRAÇÃO DA RESPOSTA DA IA
+# =====================================================
+
+def extract_answer(result):
+
+    choices = result.get("choices")
+
+    if not isinstance(choices, list) or not choices:
+        raise ValueError(
+            "O OpenRouter não devolveu nenhuma escolha."
+        )
+
+    choice = choices[0]
+
+    if not isinstance(choice, dict):
+        raise ValueError("Formato de resposta inesperado.")
+
+    message = choice.get("message", {})
+
+    if not isinstance(message, dict):
+        raise ValueError("A mensagem da IA veio num formato inválido.")
+
+    if message.get("refusal"):
+        raise ValueError(
+            f"A IA recusou a análise: {message['refusal']}"
+        )
+
+    content = message.get("content", "")
+
+    if isinstance(content, str):
+        answer = content.strip()
+
+    elif isinstance(content, list):
+        parts = []
+
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+
+            elif isinstance(item, dict):
+                if item.get("text"):
+                    parts.append(str(item["text"]))
+
+        answer = "\n".join(parts).strip()
+
+    elif isinstance(content, dict):
+        answer = str(content.get("text", "")).strip()
+
+    else:
+        answer = ""
+
+    if not answer:
+        reason = choice.get(
+            "finish_reason",
+            "não informado"
+        )
+
+        raise ValueError(
+            f"A IA não devolveu texto. "
+            f"Motivo: {reason}"
+        )
+
+    return answer
 
 
 # =====================================================
@@ -299,9 +384,13 @@ def analyze_chart(img):
     api_key = os.environ.get("OPENROUTER_API_KEY")
 
     if not api_key:
-        return None, "A chave OPENROUTER_API_KEY não foi encontrada no Render."
+        return None, (
+            "A chave OPENROUTER_API_KEY não foi encontrada "
+            "nas variáveis de ambiente do Render."
+        )
 
     try:
+
         encoded_image = image_to_base64(img)
 
         headers = {
@@ -344,45 +433,75 @@ def analyze_chart(img):
             timeout=120
         )
 
+        # Tentar interpretar a resposta JSON
+        try:
+            result = response.json()
+
+        except ValueError:
+            return None, (
+                f"O servidor devolveu uma resposta inválida. "
+                f"HTTP {response.status_code}."
+            )
+
+        # Verificar erros HTTP
         if response.status_code != 200:
-            try:
-                details = response.json()
-            except Exception:
-                details = response.text
+
+            error = result.get("error", {})
+
+            if isinstance(error, dict):
+                details = error.get(
+                    "message",
+                    str(error)
+                )
+            else:
+                details = str(error)
 
             return None, (
-                f"OpenRouter HTTP {response.status_code}: "
+                f"OPENROUTER HTTP {response.status_code}: "
                 f"{details}"
             )
 
-        result = response.json()
+        # Verificar erro dentro da resposta
+        if result.get("error"):
 
-        answer = (
-            result.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+            error = result["error"]
 
-        if isinstance(answer, list):
-            answer = "\n".join(
-                str(item.get("text", ""))
-                for item in answer
-                if isinstance(item, dict)
-            )
+            if isinstance(error, dict):
+                details = error.get(
+                    "message",
+                    str(error)
+                )
+            else:
+                details = str(error)
 
-        if not answer:
-            return None, "A IA não devolveu uma análise válida."
+            return None, f"ERRO OPENROUTER: {details}"
+
+        # Extrair texto de forma segura
+        answer = extract_answer(result)
 
         return answer, None
 
     except requests.exceptions.Timeout:
-        return None, "Tempo de resposta excedido. Tenta novamente."
+
+        return None, (
+            "Tempo de resposta excedido. "
+            "Tenta novamente."
+        )
 
     except requests.exceptions.ConnectionError:
-        return None, "Falha de ligação ao OpenRouter."
+
+        return None, (
+            "Falha de ligação ao OpenRouter. "
+            "Verifica a conexão do servidor."
+        )
+
+    except ValueError as e:
+
+        return None, f"RESPOSTA INVÁLIDA: {str(e)}"
 
     except Exception as e:
-        return None, f"Erro inesperado: {str(e)}"
+
+        return None, f"ERRO INESPERADO: {str(e)}"
 
 
 # =====================================================
@@ -391,10 +510,16 @@ def analyze_chart(img):
 
 st.markdown("---")
 
-if st.button("🔍 ANALISAR GRÁFICO", use_container_width=True):
+if st.button(
+    "🔍 ANALISAR GRÁFICO",
+    use_container_width=True
+):
 
     if image is None:
-        st.warning("Primeiro, carrega um screenshot do gráfico.")
+
+        st.warning(
+            "Primeiro, carrega um screenshot do gráfico."
+        )
 
     else:
 
@@ -405,6 +530,7 @@ if st.button("🔍 ANALISAR GRÁFICO", use_container_width=True):
             answer, error = analyze_chart(image)
 
         if error:
+
             st.error(error)
 
         else:
@@ -412,32 +538,48 @@ if st.button("🔍 ANALISAR GRÁFICO", use_container_width=True):
             st.markdown("---")
             st.markdown("## 📊 RELATÓRIO DE ANÁLISE")
 
-            # Identificar a decisão para destacar visualmente
             upper_answer = answer.upper()
 
             if "DECISÃO: BUY" in upper_answer:
+
                 st.markdown(
-                    "<div class='buy'><h2>🟢 BUY</h2></div>",
+                    """
+                    <div class='buy'>
+                        <h2>🟢 BUY</h2>
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
 
             elif "DECISÃO: SELL" in upper_answer:
+
                 st.markdown(
-                    "<div class='sell'><h2>🔴 SELL</h2></div>",
+                    """
+                    <div class='sell'>
+                        <h2>🔴 SELL</h2>
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
 
             elif "DECISÃO: AGUARDAR" in upper_answer:
+
                 st.markdown(
-                    "<div class='wait'><h2>🟡 AGUARDAR</h2></div>",
+                    """
+                    <div class='wait'>
+                        <h2>🟡 AGUARDAR</h2>
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
 
             st.markdown(answer)
 
             st.markdown("---")
+
             st.caption(
-                "DONCULLER-TRADE47 | Análise técnica assistida por IA"
+                "DONCULLER-TRADE47 | "
+                "Análise técnica assistida por IA"
             )
 
 
@@ -449,5 +591,6 @@ st.markdown("---")
 
 st.caption(
     "A análise é uma estimativa técnica. "
-    "Testa sempre em conta Demo antes de operar com dinheiro real."
+    "Testa sempre em conta Demo antes de operar "
+    "com dinheiro real."
 )
