@@ -1,651 +1,112 @@
-import os
-import io
-import re
-import json
-import base64
-from datetime import datetime, timezone
-
-import requests
-import numpy as np
-import pandas as pd
 import streamlit as st
+import requests
+import os
+import base64
+import json
+from io import BytesIO
 from PIL import Image, ImageOps
 
 # =====================================================
-# DONCULLER-TRADE47
-# =====================================================
-
-APP = "DONCULLER-TRADE47"
-
-API = "https://openrouter.ai/api/v1/chat/completions"
-
-KEY = os.getenv("OPENROUTER_API_KEY", "")
-
-DEFAULT_MODEL = os.getenv(
-    "OPENROUTER_MODEL",
-    "google/gemma-4-26b-a4b-it:free"
-)
-
-FALLBACK_MODELS = [
-    "google/gemma-4-26b-a4b-it:free",
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "nvidia/nemotron-nano-12b-v2-vl:free",
-    "openrouter/free",
-]
-
-# =====================================================
-# INTERFACE
+# CONFIGURAÇÃO
 # =====================================================
 
 st.set_page_config(
-    page_title=APP,
-    page_icon="📊",
-    layout="wide"
+    page_title="DONCULLER-TRADE47",
+    page_icon="🦁",
+    layout="centered"
 )
+
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODEL = "openrouter/free"
+
+# =====================================================
+# VISUAL
+# =====================================================
 
 st.markdown("""
 <style>
 .stApp {
-    background: #071426;
-    color: #edf3fb;
+    background-color: #071426;
+    color: #ffffff;
 }
-.block-container {
-    max-width: 1180px;
-    padding-top: 1.5rem;
-}
+
 h1, h2, h3 {
-    color: #f3f7ff;
+    color: #ffffff;
 }
-div[data-testid="stMetric"] {
-    background: #10243d;
-    border: 1px solid #294866;
-    padding: 12px;
+
+.subtitle {
+    color: #8daacb;
+    text-align: center;
+    font-size: 14px;
+}
+
+.panel {
+    background: #10233d;
+    padding: 18px;
     border-radius: 12px;
+    border: 1px solid #203d60;
+    margin-bottom: 15px;
+}
+
+.buy {
+    background: #063d32;
+    border: 1px solid #12b886;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.sell {
+    background: #481c29;
+    border: 1px solid #e05260;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.wait {
+    background: #3d3515;
+    border: 1px solid #d6b33c;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.stButton > button {
+    background-color: #1479d1;
+    color: white;
+    border-radius: 8px;
+    border: none;
+    width: 100%;
+    font-weight: bold;
+    padding: 12px;
+}
+
+.stButton > button:hover {
+    background-color: #0864b5;
+    color: white;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 DONCULLER-TRADE47")
-
-st.caption(
-    "AI Trading Chart Analyzer · Leitura técnica estruturada"
+st.markdown(
+    "<h1 style='text-align:center;'>🦁 DONCULLER-TRADE47</h1>",
+    unsafe_allow_html=True
 )
 
-# =====================================================
-# PREPARAÇÃO DA IMAGEM
-# =====================================================
+st.markdown(
+    "<p class='subtitle'>AI TRADING CHART ANALYZER</p>",
+    unsafe_allow_html=True
+)
 
-def prep_image(file):
-
-    file.seek(0)
-
-    im = ImageOps.exif_transpose(
-        Image.open(file)
-    ).convert("RGB")
-
-    im.thumbnail((1800, 1800))
-
-    b = io.BytesIO()
-
-    im.save(
-        b,
-        format="JPEG",
-        quality=88,
-        optimize=True
-    )
-
-    return (
-        "data:image/jpeg;base64,"
-        + base64.b64encode(b.getvalue()).decode()
-    )
-
+st.markdown("---")
 
 # =====================================================
-# LEITURA DOS DADOS OHLC
+# CONFIGURAÇÃO DA ANÁLISE
 # =====================================================
 
-def read_ohlc(file):
+st.markdown("### ⚙️ CONFIGURAÇÃO")
 
-    df = pd.read_csv(file)
+col1, col2 = st.columns(2)
 
-    aliases = {
-        "open": ["open", "o", "abertura"],
-        "high": ["high", "h", "max", "máxima", "maxima"],
-        "low": ["low", "l", "min", "mínima", "minima"],
-        "close": ["close", "c", "fecho", "fechamento"]
-    }
-
-    cols = {
-        str(c).strip().lower(): c
-        for c in df.columns
-    }
-
-    ren = {}
-
-    for target, names in aliases.items():
-
-        for n in names:
-
-            if n in cols:
-
-                ren[cols[n]] = target
-
-                break
-
-    df = df.rename(columns=ren)
-
-    if not all(
-        x in df.columns
-        for x in ["open", "high", "low", "close"]
-    ):
-
-        raise ValueError(
-            "CSV precisa de Open, High, Low e Close."
-        )
-
-    for x in ["open", "high", "low", "close"]:
-
-        df[x] = pd.to_numeric(
-            df[x],
-            errors="coerce"
-        )
-
-    df = df.dropna(
-        subset=["open", "high", "low", "close"]
-    )
-
-    df = df.tail(500).reset_index(drop=True)
-
-    if len(df) < 35:
-
-        raise ValueError(
-            "Envia pelo menos 35 velas válidas; idealmente 200."
-        )
-
-    if (df.high < df.low).any():
-
-        raise ValueError(
-            "Há velas inválidas: High inferior a Low."
-        )
-
-    return df
-
-
-# =====================================================
-# INDICADORES TÉCNICOS
-# =====================================================
-
-def indicators(df):
-
-    c = df.close
-
-    e20 = c.ewm(
-        span=20,
-        adjust=False
-    ).mean()
-
-    e50 = c.ewm(
-        span=50,
-        adjust=False
-    ).mean()
-
-    e12 = c.ewm(
-        span=12,
-        adjust=False
-    ).mean()
-
-    e26 = c.ewm(
-        span=26,
-        adjust=False
-    ).mean()
-
-    macd = e12 - e26
-
-    sig = macd.ewm(
-        span=9,
-        adjust=False
-    ).mean()
-
-    d = c.diff()
-
-    gain = d.clip(
-        lower=0
-    ).ewm(
-        alpha=1/14,
-        adjust=False
-    ).mean()
-
-    loss = (-d.clip(
-        upper=0
-    )).ewm(
-        alpha=1/14,
-        adjust=False
-    ).mean()
-
-    rs = gain / loss.replace(0, np.nan)
-
-    rsi = 100 - 100 / (1 + rs)
-
-    tr = pd.concat([
-        df.high - df.low,
-        (df.high - c.shift()).abs(),
-        (df.low - c.shift()).abs()
-    ], axis=1).max(axis=1)
-
-    atr = tr.rolling(14).mean()
-
-    fh = []
-    fl = []
-
-    for i in range(
-        max(2, len(df)-80),
-        len(df)-2
-    ):
-
-        if df.high[i] > max(
-            df.high[i-2:i].tolist()
-            + df.high[i+1:i+3].tolist()
-        ):
-
-            fh.append(float(df.high[i]))
-
-        if df.low[i] < min(
-            df.low[i-2:i].tolist()
-            + df.low[i+1:i+3].tolist()
-        ):
-
-            fl.append(float(df.low[i]))
-
-    last = float(c.iloc[-1])
-
-    hist = float(
-        (macd - sig).iloc[-1]
-    )
-
-    return {
-
-        "candles": len(df),
-
-        "last_close": last,
-
-        "ema20": float(e20.iloc[-1]),
-
-        "ema50": float(e50.iloc[-1]),
-
-        "rsi14": (
-            None
-            if pd.isna(rsi.iloc[-1])
-            else round(float(rsi.iloc[-1]), 2)
-        ),
-
-        "macd": round(
-            float(macd.iloc[-1]), 6
-        ),
-
-        "macd_signal": round(
-            float(sig.iloc[-1]), 6
-        ),
-
-        "macd_histogram": round(
-            hist, 6
-        ),
-
-        "atr14": (
-            None
-            if pd.isna(atr.iloc[-1])
-            else float(atr.iloc[-1])
-        ),
-
-        "confirmed_fractal_high": fh[-5:],
-
-        "confirmed_fractal_low": fl[-5:],
-
-        "ema_alignment": (
-
-            "bullish"
-            if last > e20.iloc[-1] > e50.iloc[-1]
-
-            else "bearish"
-            if last < e20.iloc[-1] < e50.iloc[-1]
-
-            else "mixed"
-        ),
-
-        "macd_state": (
-
-            "bullish"
-            if hist > 0
-
-            else "bearish"
-            if hist < 0
-
-            else "neutral"
-        )
-    }
-
-
-# =====================================================
-# MOTOR DE ANÁLISE
-# =====================================================
-
-def prompt(asset, tf, platform, style, metrics):
-
-    return f"""
-És o analista técnico do {APP}.
-
-Faz uma análise rigorosa do screenshot
-e dos dados OHLC abaixo.
-
-Responde em português simples,
-direto e operacional.
-
-ATIVO={asset}
-
-TIMEFRAME={tf}
-
-PLATAFORMA={platform}
-
-ESTILO={style}
-
-OHLC/INDICADORES CALCULADOS=
-{json.dumps(metrics, ensure_ascii=False)}
-
-AVALIA:
-
-- Tendência.
-- Estrutura HH/HL/LH/LL.
-- Impulso e correção.
-- Suporte e resistência.
-- Liquidez.
-- Falsas rupturas.
-- Velas e reversões.
-- EMA.
-- RSI.
-- MACD.
-- Fractais.
-- Swings tipo ZigZag.
-
-Compara cenário BUY e SELL antes da decisão.
-
-Não digas que viste um indicador
-que não aparece.
-
-Se houver dados OHLC,
-usa os valores numéricos.
-
-Se só houver screenshot,
-nunca inventes preços.
-
-Se a escala não for legível,
-declara que o preço não pode
-ser identificado com precisão.
-
-Escolhe BUY ou SELL se existir
-configuração confirmada.
-
-AGUARDAR só quando faltar confirmação
-ou os dados forem insuficientes.
-
-Não forces sinais.
-
-Define entrada como zona
-mais gatilho de ativação.
-
-SL por invalidação estrutural.
-
-TP1 e TP2 em níveis plausíveis.
-
-Não inventes probabilidades
-nem prometas 75%.
-
-A qualidade Baixa/Média/Alta
-representa a qualidade da evidência,
-não a probabilidade de vitória.
-
-Fractais só são confirmados
-com duas velas à direita.
-
-Não declares ZigZag confirmado
-sem parâmetros.
-
-DEVOLVE APENAS JSON VÁLIDO:
-
-{{
-"decision":"BUY|SELL|AGUARDAR",
-"reason":"motivo curto",
-"trend":"estrutura/tendência",
-"buy_case":"cenário comprador",
-"sell_case":"cenário vendedor",
-"entry_zone":"zona ou não identificável",
-"activation":"gatilho exato",
-"stop_loss":"nível/regra",
-"take_profit_1":"alvo 1",
-"take_profit_2":"alvo 2",
-"risk_reward":"relação ou não calculável",
-"invalidation":"condição que invalida",
-"confirmations":["..."],
-"conflicts":["..."],
-"confidence_quality":"Baixa|Média|Alta",
-"missing_data":["..."],
-"next_action":"próxima ação curta"
-}}
-"""
-
-
-# =====================================================
-# CONVERSÃO DA RESPOSTA JSON
-# =====================================================
-
-def parse_json(s):
-
-    s = (s or "").strip()
-
-    s = re.sub(
-        r"^```(?:json)?\s*|\s*```$",
-        "",
-        s,
-        flags=re.I
-    )
-
-    try:
-
-        return json.loads(s)
-
-    except Exception:
-
-        m = re.search(
-            r"\{.*\}",
-            s,
-            re.S
-        )
-
-        if m:
-
-            return json.loads(m.group())
-
-        raise ValueError(
-            "O modelo não devolveu JSON válido. "
-            "Tenta novamente ou muda de modelo."
-        )
-
-
-# =====================================================
-# CONEXÃO OPENROUTER E MODELOS ALTERNATIVOS
-# =====================================================
-
-def analyze(model, pr, image):
-
-    if not KEY:
-
-        raise RuntimeError(
-            "OPENROUTER_API_KEY não está configurada no Render."
-        )
-
-    model = (
-        model or DEFAULT_MODEL
-    ).strip()
-
-    chain = [
-        model
-    ] + [
-        m for m in FALLBACK_MODELS
-        if m != model
-    ]
-
-    payload = {
-
-        "model": model,
-
-        "models": chain,
-
-        "temperature": 0.15,
-
-        "max_tokens": 2200,
-
-        "stream": False,
-
-        "messages": [
-
-            {
-                "role": "system",
-
-                "content": (
-                    "Responde apenas com JSON válido. "
-                    "Nunca inventes preços."
-                )
-            },
-
-            {
-                "role": "user",
-
-                "content": [
-
-                    {
-                        "type": "text",
-                        "text": pr
-                    },
-
-                    {
-                        "type": "image_url",
-
-                        "image_url": {
-                            "url": image
-                        }
-                    }
-                ]
-            }
-        ]
-    }
-
-    headers = {
-
-        "Authorization": "Bearer " + KEY,
-
-        "Content-Type": "application/json",
-
-        "HTTP-Referer": (
-            "https://doncullertrade47.onrender.com"
-        ),
-
-        "X-Title": APP
-    }
-
-    res = requests.post(
-        API,
-        headers=headers,
-        json=payload,
-        timeout=150
-    )
-
-    if res.status_code != 200:
-
-        detail = res.text[:1200]
-
-        if res.status_code == 429:
-
-            raise RuntimeError(
-                "Os modelos disponíveis recusaram "
-                "o pedido por limite 429. "
-                "Aguarda e tenta mais tarde. "
-                "Detalhe: " + detail
-            )
-
-        raise RuntimeError(
-            f"OpenRouter HTTP {res.status_code}: {detail}"
-        )
-
-    body = res.json()
-
-    choices = body.get("choices") or []
-
-    if not choices:
-
-        raise RuntimeError(
-            "A API não devolveu uma resposta utilizável."
-        )
-
-    msg = choices[0].get("message") or {}
-
-    content = msg.get("content")
-
-    if isinstance(content, list):
-
-        content = "".join(
-            x.get("text", "")
-            for x in content
-            if isinstance(x, dict)
-        )
-
-    if not content:
-
-        raise RuntimeError(
-            "Resposta vazia do modelo. "
-            "Confirma se o modelo aceita imagens."
-        )
-
-    result = parse_json(content)
-
-    if result.get("decision") not in [
-        "BUY",
-        "SELL",
-        "AGUARDAR"
-    ]:
-
-        raise ValueError(
-            "Decisão inválida recebida."
-        )
-
-    required = [
-        "reason",
-        "trend",
-        "entry_zone",
-        "activation",
-        "stop_loss",
-        "take_profit_1",
-        "take_profit_2",
-        "invalidation",
-        "confidence_quality"
-    ]
-
-    for k in required:
-
-        if k not in result:
-
-            raise ValueError(
-                "Relatório incompleto: falta " + k
-            )
-
-    return result
-
-
-# =====================================================
-# CONFIGURAÇÕES DA APLICAÇÃO
-# =====================================================
-
-with st.sidebar:
-
-    st.header("Configuração")
-
+with col1:
     asset = st.selectbox(
         "Ativo",
         [
@@ -664,387 +125,329 @@ with st.sidebar:
             "Step Index",
             "EUR/USD",
             "GBP/USD",
-            "XAU/USD",
-            "Outro"
+            "XAU/USD"
         ]
     )
 
-    if asset == "Outro":
-
-        asset = st.text_input(
-            "Nome do ativo",
-            ""
-        )
-
-    tf = st.selectbox(
-        "Timeframe",
-        [
-            "M1",
-            "M5",
-            "M15",
-            "M30",
-            "H1",
-            "H4",
-            "D1"
-        ]
+with col2:
+    timeframe = st.selectbox(
+        "Temporalidade",
+        ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
     )
 
-    platform = st.selectbox(
-        "Plataforma",
-        [
-            "Deriv MT5",
-            "TradingView",
-            "Deriv cTrader",
-            "Outra"
-        ]
-    )
+platform = st.selectbox(
+    "Plataforma",
+    ["Deriv MT5", "Deriv cTrader", "TradingView", "Outra"]
+)
 
-    style = st.selectbox(
-        "Estilo",
-        [
-            "Scalping",
-            "Intraday",
-            "Swing"
-        ]
-    )
-
-    model = st.text_input(
-        "Modelo OpenRouter",
-        DEFAULT_MODEL
-    )
-
-    st.caption(
-        "A chave secreta permanece no Render: "
-        "OPENROUTER_API_KEY."
-    )
-
+st.markdown("---")
 
 # =====================================================
-# UPLOAD DOS FICHEIROS
+# IMAGEM
 # =====================================================
 
-col1, col2 = st.columns([1, 1])
+st.markdown("### 📷 CARREGAR GRÁFICO")
 
-with col1:
+uploaded_file = st.file_uploader(
+    "Seleciona o screenshot do gráfico",
+    type=["png", "jpg", "jpeg"]
+)
 
-    st.subheader(
-        "Screenshot do gráfico"
-    )
-
-    shot = st.file_uploader(
-        "PNG, JPG ou WEBP",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "webp"
-        ]
-    )
-
-    if shot:
+if uploaded_file:
+    try:
+        image = Image.open(uploaded_file)
+        image = ImageOps.exif_transpose(image).convert("RGB")
 
         st.image(
-            shot,
+            image,
+            caption="Gráfico selecionado",
             use_container_width=True
         )
 
+    except Exception as e:
+        st.error(f"Não foi possível abrir a imagem: {e}")
+        image = None
+else:
+    image = None
 
-with col2:
+# =====================================================
+# PREPARAÇÃO DA IMAGEM
+# =====================================================
 
-    st.subheader(
-        "Dados OHLC (opcional)"
-    )
+def image_to_base64(img):
+    buffer = BytesIO()
 
-    csv = st.file_uploader(
-        "CSV com Open, High, Low e Close",
-        type=["csv"]
-    )
+    img.thumbnail((1600, 1600))
+    img.save(buffer, format="JPEG", quality=88)
 
-    st.caption(
-        "O screenshot permite leitura visual. "
-        "O CSV permite calcular indicadores "
-        "com dados numéricos."
-    )
+    encoded = base64.b64encode(
+        buffer.getvalue()
+    ).decode("utf-8")
+
+    return encoded
 
 
 # =====================================================
-# PROCESSAMENTO DOS DADOS
+# INSTRUÇÕES DA IA
 # =====================================================
 
-metrics = {}
+def build_prompt():
 
-if csv:
+    return f"""
+És um analista técnico profissional de mercados financeiros.
+
+Analisa cuidadosamente o screenshot fornecido.
+
+ATIVO: {asset}
+TIMEFRAME: {timeframe}
+PLATAFORMA: {platform}
+
+OBJETIVO:
+Identificar a direção mais provável do próximo movimento
+operacional: BUY, SELL ou AGUARDAR.
+
+NÃO escolhas AGUARDAR automaticamente.
+Compara sempre as possibilidades de BUY e SELL.
+Escolhe BUY ou SELL quando existir evidência técnica suficiente.
+Escolhe AGUARDAR apenas quando não houver uma entrada
+tecnicamente defensável.
+
+ANALISA:
+
+1. Tendência principal.
+2. Estrutura de mercado: HH, HL, LH e LL.
+3. Suportes e resistências.
+4. Impulsos e correções.
+5. Liquidez e possíveis varrimentos.
+6. Falsos rompimentos.
+7. Padrões de velas.
+8. EMA 20 e EMA 50, se forem visíveis.
+9. RSI, se estiver visível.
+10. MACD, se estiver visível.
+11. ZigZag, se estiver visível.
+12. Fractals, se estiverem visíveis.
+13. Possíveis zonas de entrada.
+14. Relação risco/retorno.
+
+IMPORTANTE:
+Não inventes indicadores que não estejam visíveis.
+Não inventes preços que não possam ser lidos no gráfico.
+Se o preço não estiver legível, informa isso.
+Não afirmes que calculaste indicadores sem dados suficientes.
+Não prometas lucros nem percentagens de acerto.
+
+FORMATO OBRIGATÓRIO DA RESPOSTA:
+
+DECISÃO: BUY / SELL / AGUARDAR
+
+PROBABILIDADE ESTIMADA:
+BUY: ...%
+SELL: ...%
+
+QUALIDADE DO SINAL:
+Forte / Moderada / Fraca
+
+TENDÊNCIA:
+...
+
+ESTRUTURA:
+...
+
+ENTRADA:
+...
+
+CONDIÇÃO DE ATIVAÇÃO:
+...
+
+STOP LOSS:
+...
+
+TAKE PROFIT 1:
+...
+
+TAKE PROFIT 2:
+...
+
+RISCO/RETORNO:
+...
+
+CONFIRMAÇÕES:
+...
+
+RISCOS E INVALIDAÇÃO:
+...
+
+JUSTIFICAÇÃO:
+Explica de forma curta e direta.
+
+PRÓXIMA AÇÃO:
+Diz exatamente o que o trader deve esperar ou fazer.
+
+As probabilidades são estimativas técnicas, não garantias.
+Se não houver dados suficientes para definir preços,
+indica claramente essa limitação.
+Responde em português simples e operacional.
+"""
+
+
+# =====================================================
+# ANÁLISE OPENROUTER
+# =====================================================
+
+def analyze_chart(img):
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+
+    if not api_key:
+        return None, "A chave OPENROUTER_API_KEY não foi encontrada no Render."
 
     try:
+        encoded_image = image_to_base64(img)
 
-        df = read_ohlc(csv)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://doncullertrade47.onrender.com",
+            "X-Title": "DONCULLER-TRADE47"
+        }
 
-        metrics = indicators(df)
+        payload = {
+            "model": MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": build_prompt()
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": (
+                                    "data:image/jpeg;base64,"
+                                    + encoded_image
+                                )
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 1800
+        }
 
-        st.success(
-            f"CSV válido: {len(df)} velas."
+        response = requests.post(
+            API_URL,
+            headers=headers,
+            json=payload,
+            timeout=120
         )
 
-        with st.expander(
-            "Ver indicadores calculados"
-        ):
+        if response.status_code != 200:
+            try:
+                details = response.json()
+            except Exception:
+                details = response.text
 
-            st.json(metrics)
+            return None, (
+                f"OpenRouter HTTP {response.status_code}: "
+                f"{details}"
+            )
+
+        result = response.json()
+
+        answer = (
+            result.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        if isinstance(answer, list):
+            answer = "\n".join(
+                str(item.get("text", ""))
+                for item in answer
+                if isinstance(item, dict)
+            )
+
+        if not answer:
+            return None, "A IA não devolveu uma análise válida."
+
+        return answer, None
+
+    except requests.exceptions.Timeout:
+        return None, "Tempo de resposta excedido. Tenta novamente."
+
+    except requests.exceptions.ConnectionError:
+        return None, "Falha de ligação ao OpenRouter."
 
     except Exception as e:
-
-        st.error(
-            "Erro no CSV: " + str(e)
-        )
-
-        metrics = {}
+        return None, f"Erro inesperado: {str(e)}"
 
 
 # =====================================================
 # BOTÃO DE ANÁLISE
 # =====================================================
 
-if st.button(
-    "🔎 ANALISAR GRÁFICO",
-    type="primary",
-    use_container_width=True
-):
+st.markdown("---")
 
-    if not shot:
+if st.button("🔍 ANALISAR GRÁFICO", use_container_width=True):
 
-        st.error(
-            "Carrega o screenshot primeiro."
-        )
+    if image is None:
+        st.warning("Primeiro, carrega um screenshot do gráfico.")
 
     else:
 
-        try:
+        with st.spinner(
+            "A analisar tendência, estrutura e possíveis entradas..."
+        ):
 
-            with st.spinner(
-                "A comparar BUY e SELL "
-                "e a analisar a estrutura..."
-            ):
+            answer, error = analyze_chart(image)
 
-                report = analyze(
+        if error:
+            st.error(error)
 
-                    model.strip(),
+        else:
 
-                    prompt(
-                        asset,
-                        tf,
-                        platform,
-                        style,
-                        metrics
-                    ),
+            st.markdown("---")
+            st.markdown("## 📊 RELATÓRIO DE ANÁLISE")
 
-                    prep_image(shot)
+            # Identificar a decisão para destacar visualmente
+            upper_answer = answer.upper()
+
+            if "DECISÃO: BUY" in upper_answer:
+                st.markdown(
+                    "<div class='buy'><h2>🟢 BUY</h2></div>",
+                    unsafe_allow_html=True
                 )
 
-                st.session_state.report = report
-
-                st.session_state.meta = (
-
-                    f"{asset} · {tf} · {model} · "
-
-                    f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
+            elif "DECISÃO: SELL" in upper_answer:
+                st.markdown(
+                    "<div class='sell'><h2>🔴 SELL</h2></div>",
+                    unsafe_allow_html=True
                 )
 
-        except Exception as e:
+            elif "DECISÃO: AGUARDAR" in upper_answer:
+                st.markdown(
+                    "<div class='wait'><h2>🟡 AGUARDAR</h2></div>",
+                    unsafe_allow_html=True
+                )
 
-            st.error(
-                "Falha na análise: " + str(e)
+            st.markdown(answer)
+
+            st.markdown("---")
+            st.caption(
+                "DONCULLER-TRADE47 | Análise técnica assistida por IA"
             )
 
 
 # =====================================================
-# APRESENTAÇÃO DO RELATÓRIO
+# AVISO
 # =====================================================
 
-if "report" in st.session_state:
-
-    r = st.session_state.report
-
-    st.divider()
-
-    st.subheader(
-        "Resultado"
-    )
-
-    st.caption(
-        st.session_state.get("meta", "")
-    )
-
-    d = r["decision"]
-
-    if d == "BUY":
-
-        st.success(
-            "🟢 BUY"
-        )
-
-    elif d == "SELL":
-
-        st.error(
-            "🔴 SELL"
-        )
-
-    else:
-
-        st.warning(
-            "🟡 AGUARDAR"
-        )
-
-    st.markdown(
-        "### Porquê"
-    )
-
-    st.write(
-        r["reason"]
-    )
-
-    st.markdown(
-        "### Leitura do mercado"
-    )
-
-    st.write(
-        r["trend"]
-    )
-
-    a, b = st.columns(2)
-
-    with a:
-
-        st.markdown(
-            "**Cenário BUY**"
-        )
-
-        st.write(
-            r.get("buy_case", "—")
-        )
-
-    with b:
-
-        st.markdown(
-            "**Cenário SELL**"
-        )
-
-        st.write(
-            r.get("sell_case", "—")
-        )
-
-    st.markdown(
-        "### Plano operacional"
-    )
-
-    x, y, z = st.columns(3)
-
-    x.metric(
-        "Zona de entrada",
-        str(r["entry_zone"])
-    )
-
-    y.metric(
-        "Stop Loss",
-        str(r["stop_loss"])
-    )
-
-    z.metric(
-        "Qualidade",
-        str(r["confidence_quality"])
-    )
-
-    x, y, z = st.columns(3)
-
-    x.metric(
-        "Take Profit 1",
-        str(r["take_profit_1"])
-    )
-
-    y.metric(
-        "Take Profit 2",
-        str(r["take_profit_2"])
-    )
-
-    z.metric(
-        "Risco/Retorno",
-        str(
-            r.get(
-                "risk_reward",
-                "Não calculável"
-            )
-        )
-    )
-
-    st.markdown(
-        "**Ativação:** "
-        + str(r["activation"])
-    )
-
-    st.markdown(
-        "**Invalidação:** "
-        + str(r["invalidation"])
-    )
-
-    st.markdown(
-        "### Confirmações"
-    )
-
-    for v in r.get(
-        "confirmations",
-        []
-    ):
-
-        st.write(
-            "✓ " + str(v)
-        )
-
-    if r.get("conflicts"):
-
-        st.markdown(
-            "### Contradições e riscos"
-        )
-
-        for v in r["conflicts"]:
-
-            st.write(
-                "• " + str(v)
-            )
-
-    if r.get("missing_data"):
-
-        st.markdown(
-            "### Dados em falta"
-        )
-
-        for v in r["missing_data"]:
-
-            st.write(
-                "• " + str(v)
-            )
-
-    st.info(
-        "Próxima ação: "
-        + str(r.get("next_action", "—"))
-    )
-
-    with st.expander(
-        "Relatório JSON completo"
-    ):
-
-        st.json(r)
-
-
-# =====================================================
-# AVISO FINAL
-# =====================================================
-
-st.divider()
+st.markdown("---")
 
 st.caption(
-    "Ferramenta de apoio. Não executa ordens "
-    "nem recebe cotações em tempo real. "
-    "A meta de 75% só pode ser avaliada "
-    "com histórico de sinais e testes Demo; "
-    "não é garantia. Um screenshot isolado "
-    "não garante precisão de preço."
-    )
+    "A análise é uma estimativa técnica. "
+    "Testa sempre em conta Demo antes de operar com dinheiro real."
+)
