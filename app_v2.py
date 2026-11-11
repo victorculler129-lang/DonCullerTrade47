@@ -142,7 +142,7 @@ platform = st.selectbox(
 st.markdown("---")
 
 # =====================================================
-# IMAGEM
+# CARREGAR IMAGEM
 # =====================================================
 
 st.markdown("### 📷 CARREGAR GRÁFICO")
@@ -177,7 +177,7 @@ def image_to_base64(img):
 
     buffer = BytesIO()
 
-    # Trabalhar numa cópia para preservar a imagem original
+    # Criar cópia para preservar a imagem original
     img = img.copy()
     img.thumbnail((1600, 1600))
 
@@ -209,8 +209,8 @@ TIMEFRAME: {timeframe}
 PLATAFORMA: {platform}
 
 OBJETIVO:
-Identificar a direção mais provável do próximo movimento
-operacional: BUY, SELL ou AGUARDAR.
+Identificar a direção mais provável do próximo movimento:
+BUY, SELL ou AGUARDAR.
 
 NÃO escolhas AGUARDAR automaticamente.
 Compara sempre as possibilidades de BUY e SELL.
@@ -235,26 +235,21 @@ ANALISA:
 13. Possíveis zonas de entrada.
 14. Relação risco/retorno.
 
-IMPORTANTE:
-Não inventes indicadores que não estejam visíveis.
-Não inventes preços que não possam ser lidos no gráfico.
-Se o preço não estiver legível, informa isso.
-Não afirmes que calculaste indicadores sem dados suficientes.
-Não prometas lucros nem percentagens de acerto.
+REGRAS IMPORTANTES:
 
-As probabilidades devem refletir a comparação técnica entre
-BUY e SELL. Não inventes precisão estatística.
+- Não inventes indicadores que não estejam visíveis.
+- Não inventes preços que não possam ser lidos.
+- Se o preço não estiver legível, informa isso.
+- Não afirmes que calculaste indicadores sem dados suficientes.
+- Não prometas lucros.
+- Não inventes probabilidades estatísticas.
+- As probabilidades são apenas estimativas técnicas.
+- BUY: SL abaixo da entrada e TP acima da entrada.
+- SELL: SL acima da entrada e TP abaixo da entrada.
+- Não apresentes risco/retorno se os preços forem incoerentes.
+- Não forces uma operação quando não existir confirmação.
 
-Para BUY, o Stop Loss deve ficar abaixo da entrada
-e o Take Profit acima da entrada.
-
-Para SELL, o Stop Loss deve ficar acima da entrada
-e o Take Profit abaixo da entrada.
-
-Não apresentes uma relação risco/retorno se os preços
-não forem legíveis ou coerentes.
-
-FORMATO OBRIGATÓRIO DA RESPOSTA:
+FORMATO OBRIGATÓRIO:
 
 DECISÃO: BUY / SELL / AGUARDAR
 
@@ -301,21 +296,18 @@ Explica de forma curta e direta.
 PRÓXIMA AÇÃO:
 Diz exatamente o que o trader deve esperar ou fazer.
 
-As probabilidades são estimativas técnicas, não garantias.
-Se não houver dados suficientes para definir preços,
-indica claramente essa limitação.
-
 Responde em português simples e operacional.
+Não ultrapasses 450 palavras.
 """
 
 
 # =====================================================
-# EXTRAÇÃO DA RESPOSTA DA IA
+# EXTRAIR RESPOSTA DA IA
 # =====================================================
 
 def extract_answer(result):
 
-    choices = result.get("choices")
+    choices = result.get("choices", [])
 
     if not isinstance(choices, list) or not choices:
         raise ValueError(
@@ -330,7 +322,7 @@ def extract_answer(result):
     message = choice.get("message", {})
 
     if not isinstance(message, dict):
-        raise ValueError("A mensagem da IA veio num formato inválido.")
+        raise ValueError("Mensagem da IA inválida.")
 
     if message.get("refusal"):
         raise ValueError(
@@ -343,15 +335,16 @@ def extract_answer(result):
         answer = content.strip()
 
     elif isinstance(content, list):
+
         parts = []
 
         for item in content:
+
             if isinstance(item, str):
                 parts.append(item)
 
-            elif isinstance(item, dict):
-                if item.get("text"):
-                    parts.append(str(item["text"]))
+            elif isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
 
         answer = "\n".join(parts).strip()
 
@@ -361,15 +354,29 @@ def extract_answer(result):
     else:
         answer = ""
 
+    finish_reason = choice.get(
+        "finish_reason",
+        "desconhecido"
+    )
+
     if not answer:
-        reason = choice.get(
-            "finish_reason",
-            "não informado"
-        )
+
+        if finish_reason == "length":
+            raise ValueError(
+                "A IA esgotou o limite de geração antes "
+                "de produzir o relatório. Tenta novamente."
+            )
 
         raise ValueError(
-            f"A IA não devolveu texto. "
-            f"Motivo: {reason}"
+            f"A IA não devolveu texto. Motivo: {finish_reason}"
+        )
+
+    if finish_reason == "length":
+
+        answer += (
+            "\n\n⚠️ AVISO: A resposta foi interrompida "
+            "pelo limite de geração. Confirma os dados "
+            "antes de considerar qualquer operação."
         )
 
     return answer
@@ -423,7 +430,7 @@ def analyze_chart(img):
                 }
             ],
             "temperature": 0.2,
-            "max_tokens": 1800
+            "max_tokens": 4000
         }
 
         response = requests.post(
@@ -433,7 +440,6 @@ def analyze_chart(img):
             timeout=120
         )
 
-        # Tentar interpretar a resposta JSON
         try:
             result = response.json()
 
@@ -443,7 +449,6 @@ def analyze_chart(img):
                 f"HTTP {response.status_code}."
             )
 
-        # Verificar erros HTTP
         if response.status_code != 200:
 
             error = result.get("error", {})
@@ -461,7 +466,6 @@ def analyze_chart(img):
                 f"{details}"
             )
 
-        # Verificar erro dentro da resposta
         if result.get("error"):
 
             error = result["error"]
@@ -476,7 +480,6 @@ def analyze_chart(img):
 
             return None, f"ERRO OPENROUTER: {details}"
 
-        # Extrair texto de forma segura
         answer = extract_answer(result)
 
         return answer, None
@@ -543,33 +546,21 @@ if st.button(
             if "DECISÃO: BUY" in upper_answer:
 
                 st.markdown(
-                    """
-                    <div class='buy'>
-                        <h2>🟢 BUY</h2>
-                    </div>
-                    """,
+                    "<div class='buy'><h2>🟢 BUY</h2></div>",
                     unsafe_allow_html=True
                 )
 
             elif "DECISÃO: SELL" in upper_answer:
 
                 st.markdown(
-                    """
-                    <div class='sell'>
-                        <h2>🔴 SELL</h2>
-                    </div>
-                    """,
+                    "<div class='sell'><h2>🔴 SELL</h2></div>",
                     unsafe_allow_html=True
                 )
 
             elif "DECISÃO: AGUARDAR" in upper_answer:
 
                 st.markdown(
-                    """
-                    <div class='wait'>
-                        <h2>🟡 AGUARDAR</h2>
-                    </div>
-                    """,
+                    "<div class='wait'><h2>🟡 AGUARDAR</h2></div>",
                     unsafe_allow_html=True
                 )
 
