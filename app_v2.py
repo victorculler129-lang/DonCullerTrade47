@@ -1,687 +1,507 @@
-import os
-import re
-import base64
-from io import BytesIO
-from datetime import datetime
-
+import os, io, re, json, base64
+from datetime import datetime, timezone
 import requests
+import numpy as np
+import pandas as pd
 import streamlit as st
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps
 
-# =====================================================
-# DONCULLER-TRADE47 V10.0
-# =====================================================
+APP = "DONCULLER-TRADE47"
+API = "https://openrouter.ai/api/v1/chat/completions"
+KEY = os.getenv("OPENROUTER_API_KEY", "")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
 
-st.set_page_config(
-    page_title="DONCULLER-TRADE47",
-    page_icon="🦁",
-    layout="wide"
-)
-
-API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-
-MODEL = os.getenv(
-    "OPENROUTER_MODEL",
-    "nvidia/nemotron-3.5-super-vl:free"
-).strip()
-
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-
-# =====================================================
-# INTERFACE
-# =====================================================
-
+st.set_page_config(page_title=APP, page_icon="📊", layout="wide")
 st.markdown("""
 <style>
-.stApp {
-    background-color: #071321;
-    color: #edf3fa;
-}
+.stApp{background:#071426;color:#edf3fb}
+.block-container{max-width:1180px;padding-top:1.5rem}
+h1,h2,h3{color:#f3f7ff}
+div[data-testid="stMetric"]{background:#10243d;border:1px solid #294866;padding:12px;border-radius:12px}
+</style>""", unsafe_allow_html=True)
 
-.block-container {
-    max-width: 1150px;
-    padding-top: 1.2rem;
-}
-
-section[data-testid="stSidebar"] {
-    background-color: #0b1b2d;
-}
-
-.header {
-    background: linear-gradient(120deg,#0b2035,#123858);
-    border: 1px solid #294c6a;
-    border-radius: 16px;
-    padding: 22px;
-    margin-bottom: 20px;
-}
-
-.header p {
-    color: #a8bfd2;
-    margin-bottom: 0;
-}
-
-.card {
-    background: #0d2033;
-    border: 1px solid #29445e;
-    border-radius: 14px;
-    padding: 18px;
-    margin: 12px 0;
-}
-
-.buy {
-    color: #28dc91;
-    font-size: 36px;
-    font-weight: 900;
-}
-
-.sell {
-    color: #ff6675;
-    font-size: 36px;
-    font-weight: 900;
-}
-
-.wait {
-    color: #ffd166;
-    font-size: 36px;
-    font-weight: 900;
-}
-
-.small {
-    color: #9eb6ca;
-    font-size: 12px;
-    text-transform: uppercase;
-}
-
-div.stButton > button {
-    background: #14734f;
-    color: white;
-    border: none;
-    border-radius: 10px;
-    min-height: 3rem;
-    font-weight: bold;
-}
-
-div.stButton > button:hover {
-    background: #208d65;
-    color: white;
-}
-</style>
-""", unsafe_allow_html=True)
+st.title("📊 DONCULLER-TRADE47")
+st.caption("AI Trading Chart Analyzer · Leitura técnica estruturada")
 
 
-st.markdown("""
-<div class="header">
-    <h1>🦁 DONCULLER-TRADE47</h1>
-    <p>AI TRADING CHART ANALYZER · V10.0</p>
-</div>
-""", unsafe_allow_html=True)
+def prep_image(file):
+    file.seek(0)
+    im = ImageOps.exif_transpose(Image.open(file)).convert("RGB")
+    im.thumbnail((1800, 1800))
+    b = io.BytesIO()
+    im.save(b, format="JPEG", quality=88, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
 
 
-# =====================================================
-# CONFIGURAÇÃO
-# =====================================================
+def read_ohlc(file):
+    df = pd.read_csv(file)
 
-with st.sidebar:
+    aliases = {
+        "open": ["open", "o", "abertura"],
+        "high": ["high", "h", "max", "máxima", "maxima"],
+        "low": ["low", "l", "min", "mínima", "minima"],
+        "close": ["close", "c", "fecho", "fechamento"]
+    }
 
-    st.header("⚙️ CONFIGURAÇÃO")
+    cols = {str(c).strip().lower(): c for c in df.columns}
+    ren = {}
 
-    market = st.selectbox(
-        "Mercado",
-        ["Índices Sintéticos", "Forex"]
+    for target, names in aliases.items():
+        for n in names:
+            if n in cols:
+                ren[cols[n]] = target
+                break
+
+    df = df.rename(columns=ren)
+
+    if not all(x in df.columns for x in ["open", "high", "low", "close"]):
+        raise ValueError("CSV precisa de Open, High, Low e Close.")
+
+    for x in ["open", "high", "low", "close"]:
+        df[x] = pd.to_numeric(df[x], errors="coerce")
+
+    df = df.dropna(subset=["open", "high", "low", "close"])
+    df = df.tail(500).reset_index(drop=True)
+
+    if len(df) < 35:
+        raise ValueError("Envia pelo menos 35 velas válidas; idealmente 200.")
+
+    if (df.high < df.low).any():
+        raise ValueError("Há velas inválidas: High inferior a Low.")
+
+    return df
+
+
+def indicators(df):
+    c = df.close
+
+    e20 = c.ewm(span=20, adjust=False).mean()
+    e50 = c.ewm(span=50, adjust=False).mean()
+
+    e12 = c.ewm(span=12, adjust=False).mean()
+    e26 = c.ewm(span=26, adjust=False).mean()
+
+    macd = e12 - e26
+    sig = macd.ewm(span=9, adjust=False).mean()
+
+    d = c.diff()
+    gain = d.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+    loss = (-d.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+
+    tr = pd.concat([
+        df.high - df.low,
+        (df.high - c.shift()).abs(),
+        (df.low - c.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    atr = tr.rolling(14).mean()
+
+    fh = []
+    fl = []
+
+    for i in range(max(2, len(df)-80), len(df)-2):
+        if df.high[i] > max(
+            df.high[i-2:i].tolist() + df.high[i+1:i+3].tolist()
+        ):
+            fh.append(float(df.high[i]))
+
+        if df.low[i] < min(
+            df.low[i-2:i].tolist() + df.low[i+1:i+3].tolist()
+        ):
+            fl.append(float(df.low[i]))
+
+    last = float(c.iloc[-1])
+    hist = float((macd - sig).iloc[-1])
+
+    return {
+        "candles": len(df),
+        "last_close": last,
+        "ema20": float(e20.iloc[-1]),
+        "ema50": float(e50.iloc[-1]),
+        "rsi14": None if pd.isna(rsi.iloc[-1]) else round(float(rsi.iloc[-1]), 2),
+        "macd": round(float(macd.iloc[-1]), 6),
+        "macd_signal": round(float(sig.iloc[-1]), 6),
+        "macd_histogram": round(hist, 6),
+        "atr14": None if pd.isna(atr.iloc[-1]) else float(atr.iloc[-1]),
+        "confirmed_fractal_high": fh[-5:],
+        "confirmed_fractal_low": fl[-5:],
+        "ema_alignment": (
+            "bullish" if last > e20.iloc[-1] > e50.iloc[-1]
+            else "bearish" if last < e20.iloc[-1] < e50.iloc[-1]
+            else "mixed"
+        ),
+        "macd_state": (
+            "bullish" if hist > 0
+            else "bearish" if hist < 0
+            else "neutral"
+        )
+    }
+
+
+def prompt(asset, tf, platform, style, metrics):
+    return f"""
+És o analista técnico do {APP}. Faz uma análise rigorosa do screenshot e dos dados OHLC abaixo.
+
+Responde em português simples, direto e operacional.
+
+ATIVO={asset}
+TIMEFRAME={tf}
+PLATAFORMA={platform}
+ESTILO={style}
+
+OHLC/INDICADORES CALCULADOS={json.dumps(metrics, ensure_ascii=False)}
+
+Avalia tendência, estrutura HH/HL/LH/LL, impulso/correção,
+suporte/resistência, liquidez, falsas rupturas, velas,
+EMA, RSI, MACD, fractais e swings tipo ZigZag.
+
+Compara cenário BUY e SELL antes da decisão.
+Não digas que viste um indicador que não aparece.
+
+Se houver dados OHLC, usa os valores numéricos.
+Se só houver screenshot, nunca inventes preços.
+Se a escala não for legível, declara que o preço não pode ser identificado com precisão.
+
+Escolhe BUY ou SELL se existir configuração confirmada.
+AGUARDAR só quando faltar confirmação ou os dados forem insuficientes.
+Não forces sinal.
+
+Define entrada como zona + gatilho de ativação.
+SL por invalidação estrutural.
+TP1/TP2 em níveis plausíveis.
+
+Se não for possível calcular, declara isso.
+Não inventes probabilidades nem prometas 75%.
+
+A qualidade (Baixa/Média/Alta) é qualidade da evidência,
+não chance de vitória.
+
+Fractais só são confirmados com duas velas à direita.
+Não declares ZigZag confirmado sem parâmetros.
+
+Devolve APENAS JSON válido com estas chaves:
+
+{{
+"decision":"BUY|SELL|AGUARDAR",
+"reason":"motivo curto",
+"trend":"estrutura/tendência",
+"buy_case":"cenário comprador",
+"sell_case":"cenário vendedor",
+"entry_zone":"zona ou não identificável",
+"activation":"gatilho exato",
+"stop_loss":"nível/regra",
+"take_profit_1":"alvo 1",
+"take_profit_2":"alvo 2",
+"risk_reward":"relação ou não calculável",
+"invalidation":"condição que invalida",
+"confirmations":["..."],
+"conflicts":["..."],
+"confidence_quality":"Baixa|Média|Alta",
+"missing_data":["..."],
+"next_action":"próxima ação curta"
+}}
+"""
+
+
+def parse_json(s):
+    s = (s or "").strip()
+    s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.I)
+
+    try:
+        return json.loads(s)
+    except Exception:
+        m = re.search(r"\{.*\}", s, re.S)
+        if m:
+            return json.loads(m.group())
+
+        raise ValueError(
+            "O modelo não devolveu JSON válido. Tenta novamente ou muda de modelo."
+        )
+
+
+def analyze(model, pr, image):
+    if not KEY:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY não está configurada no Render."
+        )
+
+    payload = {
+        "model": model,
+        "temperature": 0.15,
+        "max_tokens": 2200,
+        "stream": False,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Responde apenas com JSON válido. Nunca inventes preços."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": pr},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image}
+                    }
+                ]
+            }
+        ]
+    }
+
+    headers = {
+        "Authorization": "Bearer " + KEY,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://doncullertrade47.onrender.com",
+        "X-Title": APP
+    }
+
+    res = requests.post(
+        API,
+        headers=headers,
+        json=payload,
+        timeout=110
     )
 
-    if market == "Índices Sintéticos":
+    if res.status_code != 200:
+        raise RuntimeError(
+            f"OpenRouter HTTP {res.status_code}: {res.text[:1200]}"
+        )
 
-        assets = [
+    body = res.json()
+    choices = body.get("choices") or []
+
+    if not choices:
+        raise RuntimeError("A API não devolveu uma resposta utilizável.")
+
+    msg = choices[0].get("message") or {}
+    content = msg.get("content")
+
+    if isinstance(content, list):
+        content = "".join(
+            x.get("text", "")
+            for x in content
+            if isinstance(x, dict)
+        )
+
+    if not content:
+        raise RuntimeError(
+            "Resposta vazia do modelo. Confirma se o modelo aceita imagens ou escolhe outro."
+        )
+
+    result = parse_json(content)
+
+    if result.get("decision") not in ["BUY", "SELL", "AGUARDAR"]:
+        raise ValueError("Decisão inválida recebida.")
+
+    for k in [
+        "reason", "trend", "entry_zone", "activation",
+        "stop_loss", "take_profit_1", "take_profit_2",
+        "invalidation", "confidence_quality"
+    ]:
+        if k not in result:
+            raise ValueError("Relatório incompleto: falta " + k)
+
+    return result
+
+
+with st.sidebar:
+    st.header("Configuração")
+
+    asset = st.selectbox(
+        "Ativo",
+        [
             "Boom 1000", "Crash 1000",
             "Boom 500", "Crash 500",
             "Boom 300", "Crash 300",
             "Boom 100", "Crash 100",
             "Boom 50", "Crash 50",
-            "Jump Index 50",
-            "Jump Index",
-            "Step Index"
+            "Jump Index 50", "Jump Index",
+            "Step Index", "EUR/USD",
+            "GBP/USD", "XAU/USD", "Outro"
         ]
+    )
 
-    else:
+    if asset == "Outro":
+        asset = st.text_input("Nome do ativo", "")
 
-        assets = [
-            "EUR/USD",
-            "GBP/USD",
-            "XAU/USD"
-        ]
-
-    asset = st.selectbox("Ativo", assets)
-
-    timeframe = st.selectbox(
+    tf = st.selectbox(
         "Timeframe",
-        ["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-        index=2
+        ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
     )
 
     platform = st.selectbox(
         "Plataforma",
-        ["Deriv MT5", "TradingView", "Outra"]
+        ["Deriv MT5", "TradingView", "Deriv cTrader", "Outra"]
     )
 
-    st.divider()
-
-    st.caption("Motor de análise visual")
-    st.caption("Modelo: " + MODEL)
-    st.caption("Versão: V10.0")
-
-
-# =====================================================
-# PROMPT DE ANÁLISE
-# =====================================================
-
-def create_prompt():
-
-    return f"""
-És o motor de análise técnica da DONCULLER-TRADE47.
-
-Analisa cuidadosamente o screenshot enviado.
-
-DADOS:
-Ativo: {asset}
-Mercado: {market}
-Timeframe: {timeframe}
-Plataforma: {platform}
-
-OBJETIVO:
-Encontrar a melhor oportunidade futura de BUY ou SELL.
-
-COMPARAÇÃO:
-Avalia BUY e SELL com os mesmos critérios.
-Não favoreças nenhuma direção.
-Não escolhas sempre AGUARDAR.
-Não inventes sinais para satisfazer o utilizador.
-
-CRITÉRIOS:
-- Tendência e estrutura de mercado.
-- Topos e fundos.
-- Suportes e resistências.
-- Velas e padrões.
-- Rompimentos e retestes.
-- Zig Zag, se visível.
-- Fractals, se visíveis.
-- MACD, se visível.
-- RSI, se visível.
-- Médias móveis, se visíveis.
-
-Não afirmes que um indicador está confirmado se não estiver visível.
-Não inventes preços nem indicadores.
-
-DECISÃO:
-Escolhe BUY quando as confirmações compradoras forem superiores.
-Escolhe SELL quando as confirmações vendedoras forem superiores.
-Escolhe AGUARDAR quando não existir oportunidade suficientemente clara.
-
-ENTRADA:
-Indica uma zona de entrada ou uma entrada condicional.
-Considera a escala de preços visível.
-
-SL:
-Coloca o Stop Loss depois do nível que invalida a operação.
-
-TP:
-Apresenta dois objetivos tecnicamente plausíveis.
-
-Se os preços não forem legíveis, escreve PREÇO NÃO LEGÍVEL.
-Nunca inventes valores.
-
-FORMATO OBRIGATÓRIO:
-
-ATIVO:
-TIMEFRAME:
-
-DIREÇÃO FINAL: BUY / SELL / AGUARDAR
-
-FORÇA BUY: __/100
-FORÇA SELL: __/100
-CONFIANÇA DA ANÁLISE: __/100
-
-ENTRADA:
-ATIVAÇÃO:
-STOP LOSS:
-TAKE PROFIT 1:
-TAKE PROFIT 2:
-RISCO/RETORNO:
-
-TENDÊNCIA:
-ESTRUTURA:
-SUPORTE:
-RESISTÊNCIA:
-
-ZIG ZAG:
-FRACTALS:
-MACD:
-RSI:
-MÉDIAS MÓVEIS:
-
-CONFIRMAÇÕES:
-1.
-2.
-3.
-
-CENÁRIO CONTRÁRIO:
-INVALIDAÇÃO:
-
-RESUMO OPERACIONAL:
-
-Responde em português simples.
-Sê direto, técnico e objetivo.
-Não escrevas raciocínio interno.
-Entrega apenas o relatório final.
-"""
-
-
-# =====================================================
-# PREPARAR IMAGEM
-# =====================================================
-
-def prepare_image(uploaded):
-
-    try:
-
-        uploaded.seek(0)
-
-        image = Image.open(uploaded)
-        image = ImageOps.exif_transpose(image)
-        image = image.convert("RGB")
-
-        if image.width < 250 or image.height < 180:
-            raise ValueError("Screenshot demasiado pequeno.")
-
-        image.thumbnail(
-            (1600, 1600),
-            Image.Resampling.LANCZOS
-        )
-
-        return image
-
-    except (UnidentifiedImageError, OSError, ValueError) as error:
-
-        raise ValueError(
-            "Não foi possível abrir a imagem. "
-            "Envia um screenshot PNG ou JPG válido."
-        ) from error
-
-
-# =====================================================
-# CODIFICAR IMAGEM
-# =====================================================
-
-def encode_image(image):
-
-    buffer = BytesIO()
-
-    image.save(
-        buffer,
-        format="JPEG",
-        quality=85,
-        optimize=True
+    style = st.selectbox(
+        "Estilo",
+        ["Scalping", "Intraday", "Swing"]
     )
 
-    encoded = base64.b64encode(
-        buffer.getvalue()
-    ).decode("utf-8")
-
-    return "data:image/jpeg;base64," + encoded
-
-
-# =====================================================
-# EXTRAIR RESPOSTA
-# =====================================================
-
-def extract_response(data):
-
-    choices = data.get("choices", [])
-
-    if not choices:
-
-        error = data.get("error", {})
-
-        raise RuntimeError(
-            "O modelo não devolveu resultados: "
-            + str(error or data)[:1500]
-        )
-
-    choice = choices[0]
-    message = choice.get("message", {})
-
-    content = message.get("content")
-
-    if isinstance(content, str) and content.strip():
-        return content.strip()
-
-    if isinstance(content, list):
-
-        parts = []
-
-        for item in content:
-
-            if isinstance(item, str):
-                parts.append(item)
-
-            elif isinstance(item, dict):
-
-                text_part = item.get("text")
-
-                if text_part:
-                    parts.append(str(text_part))
-
-        result = "\n".join(parts).strip()
-
-        if result:
-            return result
-
-    refusal = message.get("refusal")
-
-    if refusal:
-        raise RuntimeError(
-            "O modelo recusou a análise: " + str(refusal)
-        )
-
-    finish_reason = choice.get("finish_reason")
-
-    reasoning = message.get("reasoning")
-
-    if finish_reason == "length":
-
-        raise RuntimeError(
-            "O modelo atingiu o limite de geração sem terminar "
-            "o relatório. O raciocínio foi desativado na V10.0, "
-            "mas o fornecedor ainda pode estar a limitar a resposta. "
-            "Tenta novamente."
-        )
-
-    raise RuntimeError(
-        "Resposta vazia do modelo. "
-        "Finalização: " + str(finish_reason)
-        + ". Raciocínio recebido: "
-        + str(reasoning)[:300]
-    )
-
-
-# =====================================================
-# ANALISAR GRÁFICO
-# =====================================================
-
-def analyze_chart(image):
-
-    if not API_KEY:
-
-        raise RuntimeError(
-            "OPENROUTER_API_KEY não encontrada no Render."
-        )
-
-    image_url = encode_image(image)
-
-    payload = {
-
-        "model": MODEL,
-
-        "messages": [
-            {
-                "role": "user",
-
-                "content": [
-
-                    {
-                        "type": "text",
-                        "text": create_prompt()
-                    },
-
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_url
-                        }
-                    }
-
-                ]
-            }
-        ],
-
-        "temperature": 0.3,
-
-        "max_tokens": 4096,
-
-        "reasoning_effort": "none",
-
-        "stream": False
-
-    }
-
-    headers = {
-
-        "Authorization": f"Bearer {API_KEY}",
-
-        "Content-Type": "application/json",
-
-        "HTTP-Referer": "https://doncullertrade47.onrender.com",
-
-        "X-Title": "DONCULLER-TRADE47"
-
-    }
-
-    try:
-
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json=payload,
-            timeout=(20, 180)
-        )
-
-    except requests.Timeout:
-
-        raise RuntimeError(
-            "O modelo demorou demasiado. "
-            "Verifica a ligação e tenta novamente."
-        )
-
-    except requests.RequestException as error:
-
-        raise RuntimeError(
-            "Erro de ligação ao OpenRouter: " + str(error)
-        )
-
-    try:
-
-        data = response.json()
-
-    except ValueError:
-
-        raise RuntimeError(
-            "O servidor devolveu uma resposta inválida: "
-            + response.text[:1000]
-        )
-
-    if not response.ok:
-
-        error = data.get("error", {})
-
-        if isinstance(error, dict):
-            detail = error.get("message", str(error))
-        else:
-            detail = str(error)
-
-        raise RuntimeError(
-            f"OpenRouter HTTP {response.status_code}: {detail}"
-        )
-
-    return extract_response(data)
-
-
-# =====================================================
-# IDENTIFICAR DIREÇÃO
-# =====================================================
-
-def get_direction(report):
-
-    match = re.search(
-        r"(?im)^\s*DIREÇÃO FINAL\s*:\s*(BUY|SELL|AGUARDAR)\b",
-        report
-    )
-
-    if match:
-        return match.group(1).upper()
-
-    return "INDEFINIDA"
-
-
-# =====================================================
-# CARREGAR SCREENSHOT
-# =====================================================
-
-st.subheader("📷 CARREGAR GRÁFICO")
-
-uploaded = st.file_uploader(
-    "Seleciona o screenshot do teu gráfico",
-    type=["png", "jpg", "jpeg", "webp"]
-)
-
-image = None
-
-if uploaded:
-
-    if uploaded.size > 8 * 1024 * 1024:
-
-        st.error(
-            "A imagem ultrapassa 8 MB. "
-            "Envia uma imagem mais leve."
-        )
-
-    else:
-
-        try:
-
-            image = prepare_image(uploaded)
-
-            st.image(
-                image,
-                caption=f"{asset} | {timeframe}",
-                use_container_width=True
-            )
-
-        except ValueError as error:
-
-            st.error(str(error))
-
-
-# =====================================================
-# EXECUTAR ANÁLISE
-# =====================================================
-
-st.divider()
-
-if st.button(
-    "🦁 ANALISAR GRÁFICO",
-    disabled=image is None,
-    use_container_width=True
-):
-
-    try:
-
-        with st.spinner(
-            "A IA está a analisar a imagem e a comparar BUY e SELL..."
-        ):
-
-            result = analyze_chart(image)
-
-        direction = get_direction(result)
-
-        st.session_state["report"] = result
-        st.session_state["direction"] = direction
-
-        st.session_state["analysis_time"] = (
-            datetime.now().strftime("%d/%m/%Y %H:%M")
-        )
-
-        st.session_state["analysis_asset"] = asset
-        st.session_state["analysis_timeframe"] = timeframe
-
-    except Exception as error:
-
-        st.error(str(error))
-
-
-# =====================================================
-# MOSTRAR RESULTADO
-# =====================================================
-
-if "report" in st.session_state:
-
-    report = st.session_state["report"]
-    direction = st.session_state["direction"]
-
-    st.divider()
-
-    st.subheader("📊 RESULTADO DA ANÁLISE")
+    model = st.text_input("Modelo OpenRouter", DEFAULT_MODEL)
 
     st.caption(
-        st.session_state.get("analysis_asset", "")
-        + " | "
-        + st.session_state.get("analysis_timeframe", "")
-        + " | "
-        + st.session_state.get("analysis_time", "")
+        "A chave secreta permanece no Render: OPENROUTER_API_KEY."
     )
 
-    if direction == "BUY":
 
-        st.markdown(
-            '<div class="card buy">🟢 BUY</div>',
-            unsafe_allow_html=True
-        )
+col1, col2 = st.columns([1, 1])
 
-    elif direction == "SELL":
+with col1:
+    st.subheader("Screenshot do gráfico")
+    shot = st.file_uploader(
+        "PNG, JPG ou WEBP",
+        type=["png", "jpg", "jpeg", "webp"]
+    )
 
-        st.markdown(
-            '<div class="card sell">🔴 SELL</div>',
-            unsafe_allow_html=True
-        )
+    if shot:
+        st.image(shot, use_container_width=True)
 
-    elif direction == "AGUARDAR":
+with col2:
+    st.subheader("Dados OHLC (opcional, recomendado)")
+    csv = st.file_uploader(
+        "CSV com Open, High, Low e Close",
+        type=["csv"]
+    )
 
-        st.markdown(
-            '<div class="card wait">🟡 AGUARDAR</div>',
-            unsafe_allow_html=True
-        )
+    st.caption(
+        "O screenshot permite leitura visual. "
+        "O CSV permite calcular indicadores com preços reais."
+    )
+
+
+metrics = {}
+
+if csv:
+    try:
+        df = read_ohlc(csv)
+        metrics = indicators(df)
+
+        st.success(f"CSV válido: {len(df)} velas.")
+
+        with st.expander("Ver indicadores calculados"):
+            st.json(metrics)
+
+    except Exception as e:
+        st.error("Erro no CSV: " + str(e))
+        metrics = {}
+
+
+if st.button(
+    "🔎 ANALISAR GRÁFICO",
+    type="primary",
+    use_container_width=True
+):
+    if not shot:
+        st.error("Carrega o screenshot primeiro.")
 
     else:
+        try:
+            with st.spinner(
+                "A comparar BUY e SELL e a analisar a estrutura..."
+            ):
+                report = analyze(
+                    model.strip(),
+                    prompt(asset, tf, platform, style, metrics),
+                    prep_image(shot)
+                )
 
-        st.warning(
-            "Não foi possível reconhecer a direção. "
-            "Não uses este relatório como sinal."
-        )
+                st.session_state.report = report
 
-    st.markdown(report)
+                st.session_state.meta = (
+                    f"{asset} · {tf} · {model} · "
+                    f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}"
+                )
 
-    st.download_button(
-        "⬇️ DESCARREGAR RELATÓRIO",
-        data=report,
-        file_name="DonCullerTrade47_analise.txt",
-        mime="text/plain",
-        use_container_width=True
+        except Exception as e:
+            st.error("Falha na análise: " + str(e))
+
+
+if "report" in st.session_state:
+    r = st.session_state.report
+
+    st.divider()
+    st.subheader("Resultado")
+    st.caption(st.session_state.get("meta", ""))
+
+    d = r["decision"]
+
+    if d == "BUY":
+        st.success("🟢 BUY")
+
+    elif d == "SELL":
+        st.error("🔴 SELL")
+
+    else:
+        st.warning("🟡 AGUARDAR")
+
+    st.markdown("### Porquê")
+    st.write(r["reason"])
+
+    st.markdown("### Leitura do mercado")
+    st.write(r["trend"])
+
+    a, b = st.columns(2)
+
+    with a:
+        st.markdown("**Cenário BUY**")
+        st.write(r.get("buy_case", "—"))
+
+    with b:
+        st.markdown("**Cenário SELL**")
+        st.write(r.get("sell_case", "—"))
+
+    st.markdown("### Plano operacional")
+
+    x, y, z = st.columns(3)
+
+    x.metric("Zona de entrada", str(r["entry_zone"]))
+    y.metric("Stop Loss", str(r["stop_loss"]))
+    z.metric("Qualidade", str(r["confidence_quality"]))
+
+    x, y, z = st.columns(3)
+
+    x.metric("Take Profit 1", str(r["take_profit_1"]))
+    y.metric("Take Profit 2", str(r["take_profit_2"]))
+    z.metric(
+        "Risco/Retorno",
+        str(r.get("risk_reward", "Não calculável"))
     )
 
+    st.markdown("**Ativação:** " + str(r["activation"]))
+    st.markdown("**Invalidação:** " + str(r["invalidation"]))
 
-# =====================================================
-# RODAPÉ
-# =====================================================
+    st.markdown("### Confirmações")
+
+    for v in r.get("confirmations", []):
+        st.write("✓ " + str(v))
+
+    if r.get("conflicts"):
+        st.markdown("### Contradições/riscos")
+
+        for v in r["conflicts"]:
+            st.write("• " + str(v))
+
+    if r.get("missing_data"):
+        st.markdown("### Dados em falta")
+
+        for v in r["missing_data"]:
+            st.write("• " + str(v))
+
+    st.info("Próxima ação: " + str(r.get("next_action", "—")))
+
+    with st.expander("Relatório JSON completo"):
+        st.json(r)
+
 
 st.divider()
 
 st.caption(
-    "DONCULLER-TRADE47 V10.0 | AI TRADING CHART ANALYZER"
-)
-
-st.warning(
-    "A aplicação analisa screenshots. "
-    "Não recebe cotações em tempo real, não executa operações "
-    "e não garante lucros. Confirma sempre os níveis no MT5 "
-    "e testa primeiro em conta Demo."
+    "Ferramenta de apoio, não executa ordens nem recebe cotações em tempo real. "
+    "A meta de 75% só pode ser avaliada com histórico de sinais e testes Demo; "
+    "não é garantia. Um screenshot isolado não garante precisão de preço."
 )
