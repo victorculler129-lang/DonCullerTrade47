@@ -15,8 +15,8 @@ st.set_page_config(
     layout="centered"
 )
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "openrouter/free"
+API_URL = "https://api.openai.com/v1/responses"
+MODEL = "gpt-5.4-mini"
 
 # =====================================================
 # VISUAL
@@ -37,14 +37,6 @@ h1, h2, h3 {
     color: #8daacb;
     text-align: center;
     font-size: 14px;
-}
-
-.panel {
-    background: #10233d;
-    padding: 18px;
-    border-radius: 12px;
-    border: 1px solid #203d60;
-    margin-bottom: 15px;
 }
 
 .buy {
@@ -152,7 +144,10 @@ uploaded_file = st.file_uploader(
     type=["png", "jpg", "jpeg"]
 )
 
+image = None
+
 if uploaded_file:
+
     try:
         image = Image.open(uploaded_file)
         image = ImageOps.exif_transpose(image).convert("RGB")
@@ -164,10 +159,9 @@ if uploaded_file:
         )
 
     except Exception as e:
-        st.error(f"Não foi possível abrir a imagem: {e}")
-        image = None
-else:
-    image = None
+        st.error(f"Erro ao abrir imagem: {e}")
+
+st.markdown("---")
 
 # =====================================================
 # PREPARAÇÃO DA IMAGEM
@@ -177,14 +171,13 @@ def image_to_base64(img):
 
     buffer = BytesIO()
 
-    # Criar cópia para preservar a imagem original
     img = img.copy()
-    img.thumbnail((1600, 1600))
+    img.thumbnail((2000, 2000))
 
     img.save(
         buffer,
         format="JPEG",
-        quality=88,
+        quality=92,
         optimize=True
     )
 
@@ -194,60 +187,67 @@ def image_to_base64(img):
 
 
 # =====================================================
-# INSTRUÇÕES DA IA
+# INSTRUÇÕES DO GPT
 # =====================================================
 
 def build_prompt():
 
     return f"""
-És um analista técnico profissional de mercados financeiros.
+És o motor principal de análise técnica da
+DONCULLER-TRADE47.
 
-Analisa cuidadosamente o screenshot fornecido.
+Analisa a imagem do gráfico com atenção.
 
 ATIVO: {asset}
 TIMEFRAME: {timeframe}
 PLATAFORMA: {platform}
 
 OBJETIVO:
-Identificar a direção mais provável do próximo movimento:
-BUY, SELL ou AGUARDAR.
+Identificar a direção mais provável do próximo movimento.
 
-NÃO escolhas AGUARDAR automaticamente.
-Compara sempre as possibilidades de BUY e SELL.
-Escolhe BUY ou SELL quando existir evidência técnica suficiente.
-Escolhe AGUARDAR apenas quando não houver uma entrada
-tecnicamente defensável.
+Compara BUY e SELL antes de decidir.
 
-ANALISA:
+Não escolhas AGUARDAR automaticamente.
+Quando houver evidência técnica suficiente, escolhe BUY ou SELL.
+Quando não houver uma entrada defensável, escolhe AGUARDAR.
+
+ANÁLISE OBRIGATÓRIA:
 
 1. Tendência principal.
-2. Estrutura de mercado: HH, HL, LH e LL.
+2. Estrutura HH, HL, LH e LL.
 3. Suportes e resistências.
-4. Impulsos e correções.
-5. Liquidez e possíveis varrimentos.
+4. Zonas de oferta e procura.
+5. Liquidez e varrimentos.
 6. Falsos rompimentos.
 7. Padrões de velas.
-8. EMA 20 e EMA 50, se forem visíveis.
-9. RSI, se estiver visível.
-10. MACD, se estiver visível.
-11. ZigZag, se estiver visível.
-12. Fractals, se estiverem visíveis.
+8. EMA 20 e EMA 50, se visíveis.
+9. RSI, se visível.
+10. MACD, se visível.
+11. ZigZag, se visível.
+12. Fractais, se visíveis.
 13. Possíveis zonas de entrada.
 14. Relação risco/retorno.
 
-REGRAS IMPORTANTES:
+REGRAS:
 
-- Não inventes indicadores que não estejam visíveis.
-- Não inventes preços que não possam ser lidos.
-- Se o preço não estiver legível, informa isso.
-- Não afirmes que calculaste indicadores sem dados suficientes.
+- Não inventes preços.
+- Não inventes indicadores.
+- Não afirmes que um indicador está positivo ou negativo
+  quando não for possível observá-lo.
+- Não confundas estimativa técnica com taxa de acerto real.
 - Não prometas lucros.
-- Não inventes probabilidades estatísticas.
-- As probabilidades são apenas estimativas técnicas.
-- BUY: SL abaixo da entrada e TP acima da entrada.
-- SELL: SL acima da entrada e TP abaixo da entrada.
-- Não apresentes risco/retorno se os preços forem incoerentes.
-- Não forces uma operação quando não existir confirmação.
+- Considera a direção e o comportamento próprio do ativo.
+- Para BUY, o SL deve ficar abaixo da entrada.
+- Para SELL, o SL deve ficar acima da entrada.
+- Só apresenta preços quando forem legíveis.
+- Se não houver dados suficientes, explica a limitação.
+- Não forces uma operação.
+
+PROBABILIDADES:
+
+Apresenta uma estimativa técnica de BUY e SELL.
+As duas percentagens devem somar 100%.
+Não as apresentes como percentagens históricas de acerto.
 
 FORMATO OBRIGATÓRIO:
 
@@ -257,7 +257,7 @@ PROBABILIDADE ESTIMADA:
 BUY: ...%
 SELL: ...%
 
-QUALIDADE DO SINAL:
+QUALIDADE:
 Forte / Moderada / Fraca
 
 TENDÊNCIA:
@@ -291,109 +291,79 @@ RISCOS E INVALIDAÇÃO:
 ...
 
 JUSTIFICAÇÃO:
-Explica de forma curta e direta.
+...
 
 PRÓXIMA AÇÃO:
-Diz exatamente o que o trader deve esperar ou fazer.
+...
 
-Responde em português simples e operacional.
-Não ultrapasses 450 palavras.
+Responde em português simples, direto e operacional.
+Máximo de 450 palavras.
 """
 
 
 # =====================================================
-# EXTRAIR RESPOSTA DA IA
+# EXTRAIR RESPOSTA OPENAI
 # =====================================================
 
 def extract_answer(result):
 
-    choices = result.get("choices", [])
+    if result.get("error"):
+        raise ValueError(str(result["error"]))
 
-    if not isinstance(choices, list) or not choices:
+    if result.get("status") == "incomplete":
+
+        details = result.get("incomplete_details", {})
+
         raise ValueError(
-            "O OpenRouter não devolveu nenhuma escolha."
+            "A resposta ficou incompleta: "
+            + str(details)
         )
 
-    choice = choices[0]
+    # Campo simplificado da Responses API
+    answer = result.get("output_text", "")
 
-    if not isinstance(choice, dict):
-        raise ValueError("Formato de resposta inesperado.")
+    if answer:
+        return answer.strip()
 
-    message = choice.get("message", {})
+    # Alternativa: procurar texto dentro de output
+    parts = []
 
-    if not isinstance(message, dict):
-        raise ValueError("Mensagem da IA inválida.")
+    for item in result.get("output", []):
 
-    if message.get("refusal"):
-        raise ValueError(
-            f"A IA recusou a análise: {message['refusal']}"
-        )
+        if item.get("type") == "message":
 
-    content = message.get("content", "")
+            for content in item.get("content", []):
 
-    if isinstance(content, str):
-        answer = content.strip()
+                if content.get("type") == "output_text":
+                    parts.append(content.get("text", ""))
 
-    elif isinstance(content, list):
+                elif content.get("type") == "refusal":
+                    raise ValueError(
+                        content.get("refusal", "Pedido recusado.")
+                    )
 
-        parts = []
-
-        for item in content:
-
-            if isinstance(item, str):
-                parts.append(item)
-
-            elif isinstance(item, dict) and item.get("text"):
-                parts.append(str(item["text"]))
-
-        answer = "\n".join(parts).strip()
-
-    elif isinstance(content, dict):
-        answer = str(content.get("text", "")).strip()
-
-    else:
-        answer = ""
-
-    finish_reason = choice.get(
-        "finish_reason",
-        "desconhecido"
-    )
+    answer = "\n".join(parts).strip()
 
     if not answer:
-
-        if finish_reason == "length":
-            raise ValueError(
-                "A IA esgotou o limite de geração antes "
-                "de produzir o relatório. Tenta novamente."
-            )
-
         raise ValueError(
-            f"A IA não devolveu texto. Motivo: {finish_reason}"
-        )
-
-    if finish_reason == "length":
-
-        answer += (
-            "\n\n⚠️ AVISO: A resposta foi interrompida "
-            "pelo limite de geração. Confirma os dados "
-            "antes de considerar qualquer operação."
+            "O GPT não devolveu um relatório de análise."
         )
 
     return answer
 
 
 # =====================================================
-# ANÁLISE OPENROUTER
+# MOTOR PRINCIPAL OPENAI
 # =====================================================
 
 def analyze_chart(img):
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
         return None, (
-            "A chave OPENROUTER_API_KEY não foi encontrada "
-            "nas variáveis de ambiente do Render."
+            "A variável OPENAI_API_KEY não foi encontrada "
+            "no Render."
         )
 
     try:
@@ -402,42 +372,40 @@ def analyze_chart(img):
 
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://doncullertrade47.onrender.com",
-            "X-Title": "DONCULLER-TRADE47"
+            "Content-Type": "application/json"
         }
 
         payload = {
             "model": MODEL,
-            "messages": [
+
+            "input": [
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "text",
+                            "type": "input_text",
                             "text": build_prompt()
                         },
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": (
-                                    "data:image/jpeg;base64,"
-                                    + encoded_image
-                                )
-                            }
+                            "type": "input_image",
+                            "image_url": (
+                                "data:image/jpeg;base64,"
+                                + encoded_image
+                            ),
+                            "detail": "high"
                         }
                     ]
                 }
             ],
-            "temperature": 0.2,
-            "max_tokens": 4000
+
+            "max_output_tokens": 1800
         }
 
         response = requests.post(
             API_URL,
             headers=headers,
             json=payload,
-            timeout=120
+            timeout=180
         )
 
         try:
@@ -445,8 +413,8 @@ def analyze_chart(img):
 
         except ValueError:
             return None, (
-                f"O servidor devolveu uma resposta inválida. "
-                f"HTTP {response.status_code}."
+                f"Resposta inválida do servidor. "
+                f"HTTP {response.status_code}"
             )
 
         if response.status_code != 200:
@@ -462,23 +430,9 @@ def analyze_chart(img):
                 details = str(error)
 
             return None, (
-                f"OPENROUTER HTTP {response.status_code}: "
+                f"OPENAI HTTP {response.status_code}: "
                 f"{details}"
             )
-
-        if result.get("error"):
-
-            error = result["error"]
-
-            if isinstance(error, dict):
-                details = error.get(
-                    "message",
-                    str(error)
-                )
-            else:
-                details = str(error)
-
-            return None, f"ERRO OPENROUTER: {details}"
 
         answer = extract_answer(result)
 
@@ -487,15 +441,14 @@ def analyze_chart(img):
     except requests.exceptions.Timeout:
 
         return None, (
-            "Tempo de resposta excedido. "
+            "O GPT demorou demasiado a responder. "
             "Tenta novamente."
         )
 
     except requests.exceptions.ConnectionError:
 
         return None, (
-            "Falha de ligação ao OpenRouter. "
-            "Verifica a conexão do servidor."
+            "Falha de ligação à API da OpenAI."
         )
 
     except ValueError as e:
@@ -511,8 +464,6 @@ def analyze_chart(img):
 # BOTÃO DE ANÁLISE
 # =====================================================
 
-st.markdown("---")
-
 if st.button(
     "🔍 ANALISAR GRÁFICO",
     use_container_width=True
@@ -527,7 +478,7 @@ if st.button(
     else:
 
         with st.spinner(
-            "A analisar tendência, estrutura e possíveis entradas..."
+            "GPT a analisar o mercado..."
         ):
 
             answer, error = analyze_chart(image)
@@ -570,7 +521,7 @@ if st.button(
 
             st.caption(
                 "DONCULLER-TRADE47 | "
-                "Análise técnica assistida por IA"
+                "Motor de análise GPT"
             )
 
 
@@ -581,7 +532,7 @@ if st.button(
 st.markdown("---")
 
 st.caption(
-    "A análise é uma estimativa técnica. "
-    "Testa sempre em conta Demo antes de operar "
-    "com dinheiro real."
+    "Análise técnica assistida por IA. "
+    "As estimativas não representam taxas de acerto comprovadas. "
+    "Testa sempre em conta Demo antes de operar com dinheiro real."
 )
