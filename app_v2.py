@@ -73,11 +73,20 @@ def save_signal(r):
     )
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
-        r["created_at"], r["category"], r["asset"],
-        r["timeframe"], r["platform"], r["direction"],
-        r["score"], r["entry"], r["activation"],
-        r["sl"], r["tp1"], r["tp2"],
-        r["rationale"], r["report"]
+        r["created_at"],
+        r["category"],
+        r["asset"],
+        r["timeframe"],
+        r["platform"],
+        r["direction"],
+        r["score"],
+        r["entry"],
+        r["activation"],
+        r["sl"],
+        r["tp1"],
+        r["tp2"],
+        r["rationale"],
+        r["report"]
     ))
 
     con.commit()
@@ -90,8 +99,10 @@ def save_signal(r):
 def all_signals():
     con = connect_db()
     rows = [
-        dict(x) for x in
-        con.execute("SELECT * FROM signals ORDER BY id DESC")
+        dict(x)
+        for x in con.execute(
+            "SELECT * FROM signals ORDER BY id DESC"
+        )
     ]
     con.close()
     return rows
@@ -109,14 +120,14 @@ def set_outcome(sid, outcome, notes):
     con.close()
 
 
-# ---------------- ATIVOS ----------------
+# ---------------- MERCADOS ----------------
 
 FOREX = [
     "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF",
-    "AUD/USD", "NZD/USD", "USD/CAD",
-    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY",
-    "EUR/CHF", "GBP/CHF", "EUR/AUD", "GBP/AUD",
-    "AUD/NZD", "XAU/USD", "XAG/USD"
+    "AUD/USD", "NZD/USD", "USD/CAD", "EUR/GBP",
+    "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/CHF",
+    "GBP/CHF", "EUR/AUD", "GBP/AUD", "AUD/NZD",
+    "XAU/USD", "XAG/USD"
 ]
 
 STOCK_INDICES = [
@@ -132,14 +143,22 @@ STOCK_INDICES = [
 ]
 
 SYNTHETIC = [
-    "Boom 1000 Index", "Crash 1000 Index",
-    "Boom 500 Index", "Crash 500 Index",
-    "Boom 300 Index", "Crash 300 Index",
-    "Boom 100 Index", "Crash 100 Index",
-    "Boom 50 Index", "Crash 50 Index",
-    "Jump 10 Index", "Jump 25 Index",
-    "Jump 50 Index", "Jump 75 Index",
-    "Jump 100 Index", "Step Index"
+    "Boom 1000 Index",
+    "Crash 1000 Index",
+    "Boom 500 Index",
+    "Crash 500 Index",
+    "Boom 300 Index",
+    "Crash 300 Index",
+    "Boom 100 Index",
+    "Crash 100 Index",
+    "Boom 50 Index",
+    "Crash 50 Index",
+    "Jump 10 Index",
+    "Jump 25 Index",
+    "Jump 50 Index",
+    "Jump 75 Index",
+    "Jump 100 Index",
+    "Step Index"
 ]
 
 TIMEFRAMES = [
@@ -156,7 +175,7 @@ PLATFORMS = [
 ]
 
 
-# ---------------- EXTRAÇÃO DO RELATÓRIO ----------------
+# ---------------- LEITURA DO RELATÓRIO ----------------
 
 def extract(report, label):
     m = re.search(
@@ -168,12 +187,18 @@ def extract(report, label):
 
 
 def parse_direction(report):
-    m = re.search(
+    patterns = [
         r"(?im)^\s*DIREÇÃO\s*:\s*(BUY|SELL|AGUARDAR)\b",
-        report
-    )
+        r"(?im)^\s*(?:SINAL|DECISÃO)\s*:\s*(BUY|SELL|AGUARDAR)\b",
+    ]
 
-    return m.group(1).upper() if m else "AGUARDAR"
+    for pattern in patterns:
+        m = re.search(pattern, report)
+
+        if m:
+            return m.group(1).upper()
+
+    return None
 
 
 def parse_score(report):
@@ -190,31 +215,28 @@ def parse_score(report):
 def make_prompt(category, asset, timeframe, platform, context):
 
     market_rules = {
-        "Forex": (
+        "Forex":
             "Mercado Forex: considera sessões, liquidez e volatilidade. "
-            "Não afirmes consultar notícias ou calendário económico sem fonte de dados."
-        ),
+            "Não afirmes consultar notícias ou calendário económico sem fonte de dados.",
 
-        "Índices bolsistas": (
+        "Índices bolsistas":
             "Índices de bolsa: considera horário da bolsa, gaps e volatilidade. "
-            "Não confundas NAS100/US30/US500/GER40 com Forex ou sintéticos."
-        ),
+            "Não confundas NAS100/US30/US500/GER40 com Forex ou sintéticos.",
 
-        "Índices sintéticos": (
+        "Índices sintéticos":
             "Sintéticos: distingue cada Boom, Crash, Jump e Step. "
-            "Não afirmes prever spikes nem inventes probabilidades de spike."
-        ),
+            "Não afirmes prever spikes nem inventes probabilidades de spike.",
 
-        "Outro": (
+        "Outro":
             "Outro mercado: identifica o instrumento pelo nome e imagem. "
             "Se não conseguires identificar a classe, declara essa limitação."
-        )
     }
 
     return f"""
 És o motor de análise técnica do {APP_NAME}.
 
 Responde em português simples, objetivo e profissional.
+
 A qualidade do sinal é mais importante do que gerar muitos sinais.
 
 CONTEXTO:
@@ -222,13 +244,14 @@ Categoria: {category}
 Ativo: {asset}
 Timeframe: {timeframe}
 Plataforma: {platform}
-Observações: {context or 'Não fornecidas'}
+Observações: {context or 'não fornecidas'}
 
 {market_rules[category]}
 
 LIMITES DA FONTE:
 
 Recebes apenas um screenshot.
+
 Não tens feed OHLC, cotações ao vivo, histórico completo,
 notícias, spread ou volume real, salvo se estiverem
 explicitamente visíveis e legíveis na imagem.
@@ -241,52 +264,102 @@ não forneças níveis numéricos fictícios.
 
 PROCESSO OBRIGATÓRIO:
 
-1. Avalia a qualidade e legibilidade da imagem.
-2. Analisa tendência e estrutura HH, HL, LH e LL.
-3. Analisa velas, suportes e resistências.
-4. Analisa oferta, procura, rompimentos e retestes.
-5. Analisa liquidez e possíveis varrimentos.
-6. Avalia EMA, RSI, MACD, Zig Zag e Fractals
-   apenas quando estiverem visíveis.
-7. Compara o cenário BUY com o cenário SELL.
-8. Identifica o cenário com melhor evidência.
-9. Verifica entrada, ativação e invalidação.
-10. Não forces BUY ou SELL.
-11. Usa AGUARDAR quando não existir vantagem técnica demonstrável.
+1. Avalia se a imagem é legível e se o ativo/timeframe indicado corresponde.
 
-A pontuação de 0 a 100 é um score técnico subjetivo,
-NÃO é uma probabilidade de vitória.
+2. Analisa tendência, swings, HH/HL/LH/LL e contexto.
+
+3. Analisa velas, suportes/resistências, oferta/procura,
+   rompimentos e retestes.
+
+4. Analisa liquidez e possíveis varrimentos,
+   sem assumir que todo pavio é sweep.
+
+5. Avalia EMA, RSI, MACD, Zig Zag e Fractals
+   apenas se estiverem visíveis.
+
+6. Compara BUY e SELL separadamente:
+   tendência/estrutura, localização do preço,
+   comportamento das velas e confirmação visível.
+
+   Não favoreças sempre AGUARDAR.
+
+7. Escolhe BUY quando a evidência compradora for claramente superior.
+
+   Escolhe SELL quando a evidência vendedora for claramente superior.
+
+   Não exijas que todos os indicadores concordem:
+   usa a confluência realmente visível.
+
+8. Distingue DIREÇÃO de ENTRADA:
+
+   Podes indicar BUY ou SELL como direção provável
+   e deixar a entrada condicionada a um gatilho futuro
+   claramente descrito.
+
+9. Usa AGUARDAR apenas quando BUY e SELL estiverem equilibrados,
+   a imagem for insuficiente ou não existir estrutura/trigger
+   minimamente defensável.
+
+10. A pontuação de 0 a 100 mede a força técnica relativa
+    do cenário escolhido.
+
+    NÃO é probabilidade de vitória nem taxa de acerto.
+
+    Não infles o score.
+
+11. Não inventes preços ou indicadores.
+
+    Se a escala não permitir nível numérico,
+    usa uma zona visual ou escreve:
+    "não determinável pela imagem".
+
+12. Não prometas 100% de acerto nem garantias de lucro.
 
 FORMATO EXATO:
 
-DIREÇÃO: BUY / SELL / AGUARDAR
-PONTUAÇÃO TÉCNICA: __/100 (não é probabilidade)
+DIREÇÃO: BUY ou SELL ou AGUARDAR
+
+PONTUAÇÃO TÉCNICA: __/100
+
 QUALIDADE DA IMAGEM: BOA / LIMITADA / INSUFICIENTE
+
 TENDÊNCIA E ESTRUTURA: ...
+
 CENÁRIO BUY: ...
+
 CENÁRIO SELL: ...
+
 MOTIVO DA DECISÃO: ...
+
 ENTRADA: ...
+
 ATIVAÇÃO: ...
+
 STOP LOSS: ...
+
 TAKE PROFIT 1: ...
+
 TAKE PROFIT 2: ...
+
 RISCO/RETORNO: ...
+
 CONFIRMAÇÕES VISÍVEIS: ...
+
 INVALIDAÇÃO: ...
+
 O QUE FALTA CONFIRMAR: ...
 
-Quando a imagem for insuficiente, diz isso sem inventar uma análise.
+Quando a imagem for insuficiente,
+diz isso sem inventar uma análise.
 """
 
 
 # ---------------- IMAGEM ----------------
 
 def image_to_base64(upload):
-
     img = Image.open(upload)
-    img = ImageOps.exif_transpose(img).convert("RGB")
 
+    img = ImageOps.exif_transpose(img).convert("RGB")
     img.thumbnail((1600, 1600))
 
     buf = BytesIO()
@@ -314,12 +387,8 @@ def ask_vision_model(image64, prompt, key, model):
         "X-Title": APP_NAME
     }
 
-    # Envia apenas UM modelo.
-    # Não envia lista "models" nem alternativas automáticas.
-
     payload = {
         "model": model,
-
         "messages": [
             {
                 "role": "user",
@@ -337,7 +406,6 @@ def ask_vision_model(image64, prompt, key, model):
                 ]
             }
         ],
-
         "temperature": 0.1,
         "max_tokens": 3500
     }
@@ -361,9 +429,7 @@ def ask_vision_model(image64, prompt, key, model):
         )
 
     except requests.exceptions.RequestException as e:
-        raise RuntimeError(
-            f"Erro de ligação: {e}"
-        )
+        raise RuntimeError(f"Erro de ligação: {e}")
 
     if res.status_code != 200:
 
@@ -415,15 +481,14 @@ def ask_vision_model(image64, prompt, key, model):
 st.markdown(
     "<h1 style='text-align:center'>🦁 DONCULLER-TRADE47</h1>"
     "<p style='text-align:center;color:#9db0c3'>"
-    "AI Trading Chart Analyzer · V6.1"
-    "</p>",
+    "AI Trading Chart Analyzer · V7</p>",
     unsafe_allow_html=True
 )
 
 st.divider()
 
 
-# ---------------- CONFIGURAÇÃO ----------------
+# ---------------- SIDEBAR ----------------
 
 with st.sidebar:
 
@@ -491,19 +556,15 @@ with st.sidebar:
     )
 
 
-# ---------------- CHAVE E MODELO ----------------
-
 api_key = os.getenv(
     "OPENROUTER_API_KEY", ""
 ).strip()
 
-# Modelo fixo para evitar que OPENROUTER_MODEL
-# substitua o modelo ou encaminhe para vários modelos.
+model = os.getenv(
+    "OPENROUTER_MODEL",
+    DEFAULT_MODEL
+).strip() or DEFAULT_MODEL
 
-model = DEFAULT_MODEL
-
-
-# ---------------- ABAS ----------------
 
 tab1, tab2, tab3 = st.tabs([
     "📊 Analisador",
@@ -549,20 +610,17 @@ with tab1:
     ):
 
         if not api_key:
-
             st.error(
-                "Configura OPENROUTER_API_KEY "
-                "nas Environment Variables do Render."
+                "Configura OPENROUTER_API_KEY nas "
+                "Environment Variables do Render."
             )
 
         elif not asset.strip():
-
             st.warning(
                 "Indica o nome do ativo."
             )
 
         elif not upload:
-
             st.warning(
                 "Carrega primeiro um screenshot."
             )
@@ -596,6 +654,15 @@ with tab1:
 
                 direction = parse_direction(report)
 
+                if direction is None:
+
+                    st.error(
+                        "A resposta da IA veio fora do formato esperado. "
+                        "A análise não foi registada; tenta novamente."
+                    )
+
+                    st.stop()
+
                 rec = {
                     "created_at": datetime.now(
                         timezone.utc
@@ -606,13 +673,33 @@ with tab1:
                     "timeframe": timeframe,
                     "platform": platform,
                     "direction": direction,
+
                     "score": parse_score(report),
 
-                    "entry": extract(report, "ENTRADA"),
-                    "activation": extract(report, "ATIVAÇÃO"),
-                    "sl": extract(report, "STOP LOSS"),
-                    "tp1": extract(report, "TAKE PROFIT 1"),
-                    "tp2": extract(report, "TAKE PROFIT 2"),
+                    "entry": extract(
+                        report,
+                        "ENTRADA"
+                    ),
+
+                    "activation": extract(
+                        report,
+                        "ATIVAÇÃO"
+                    ),
+
+                    "sl": extract(
+                        report,
+                        "STOP LOSS"
+                    ),
+
+                    "tp1": extract(
+                        report,
+                        "TAKE PROFIT 1"
+                    ),
+
+                    "tp2": extract(
+                        report,
+                        "TAKE PROFIT 2"
+                    ),
 
                     "rationale": extract(
                         report,
@@ -633,7 +720,6 @@ with tab1:
                 )
 
             except Exception as e:
-
                 st.error(str(e))
 
 
@@ -642,45 +728,84 @@ with tab1:
     if "report" in st.session_state:
 
         direction = st.session_state["direction"]
+        report = st.session_state["report"]
 
-        st.markdown(
-            '<div class="card">',
-            unsafe_allow_html=True
+        score = parse_score(report)
+
+        label_score = (
+            f"{score}/100"
+            if score is not None
+            else "não indicado"
         )
 
         if direction == "BUY":
 
             st.markdown(
-                '<div class="buy">🟢 BUY</div>',
+                f'<div class="card">'
+                f'<div class="buy">🟢 BUY — {label_score}</div>'
+                f'</div>',
                 unsafe_allow_html=True
             )
 
         elif direction == "SELL":
 
             st.markdown(
-                '<div class="sell">🔴 SELL</div>',
+                f'<div class="card">'
+                f'<div class="sell">🔴 SELL — {label_score}</div>'
+                f'</div>',
                 unsafe_allow_html=True
             )
 
         else:
 
             st.markdown(
-                '<div class="wait">🟡 AGUARDAR</div>',
+                f'<div class="card">'
+                f'<div class="wait">🟡 AGUARDAR — {label_score}</div>'
+                f'</div>',
                 unsafe_allow_html=True
             )
 
-        st.markdown(
-            st.session_state["report"]
+        st.caption(
+            "O score representa força técnica subjetiva, "
+            "não a percentagem de probabilidade de ganhar."
         )
 
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True
-        )
+        labels = [
+            ("QUALIDADE DA IMAGEM", "🖼️ Qualidade da imagem"),
+            ("TENDÊNCIA E ESTRUTURA", "📈 Tendência e estrutura"),
+            ("CENÁRIO BUY", "🟢 Cenário BUY"),
+            ("CENÁRIO SELL", "🔴 Cenário SELL"),
+            ("MOTIVO DA DECISÃO", "🧭 Motivo da decisão"),
+            ("ENTRADA", "🎯 Entrada"),
+            ("ATIVAÇÃO", "⚡ Ativação"),
+            ("STOP LOSS", "🛑 Stop Loss"),
+            ("TAKE PROFIT 1", "🏁 Take Profit 1"),
+            ("TAKE PROFIT 2", "🏁 Take Profit 2"),
+            ("RISCO/RETORNO", "⚖️ Risco/Retorno"),
+            ("CONFIRMAÇÕES VISÍVEIS", "✅ Confirmações visíveis"),
+            ("INVALIDAÇÃO", "⛔ Invalidação"),
+            ("O QUE FALTA CONFIRMAR", "🔎 O que falta confirmar")
+        ]
+
+        for field, title in labels:
+
+            value = extract(report, field)
+
+            if value:
+
+                with st.container(border=True):
+
+                    st.markdown(f"**{title}**")
+                    st.write(value)
+
+        with st.expander(
+            "Ver relatório original completo"
+        ):
+            st.text(report)
 
         st.download_button(
             "📥 Descarregar relatório",
-            st.session_state["report"],
+            report,
             file_name=(
                 f"donculler_sinal_"
                 f"{st.session_state['signal_id']}.txt"
@@ -706,9 +831,12 @@ with tab2:
     for r in records:
 
         title = (
-            f"#{r['id']} · {r['created_at'][:19]} · "
-            f"{r['asset']} · {r['timeframe']} · "
-            f"{r['direction']} · {r['outcome']}"
+            f"#{r['id']} · "
+            f"{r['created_at'][:19]} · "
+            f"{r['asset']} · "
+            f"{r['timeframe']} · "
+            f"{r['direction']} · "
+            f"{r['outcome']}"
         )
 
         with st.expander(title):
@@ -882,7 +1010,7 @@ with tab3:
             )
 
 
-# ---------------- AVISOS ----------------
+# ---------------- RODAPÉ ----------------
 
 st.divider()
 
@@ -893,5 +1021,5 @@ st.caption(
 )
 
 st.caption(
-    f"Modelo multimodal fixo: {model}"
+    f"Modelo multimodal: {model}"
 )
