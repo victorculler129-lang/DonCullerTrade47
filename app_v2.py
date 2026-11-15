@@ -190,7 +190,9 @@ def call_openrouter(image, meta, api_key, model):
     payload = {
         "model": model,
         "temperature": 0.1,
-        "max_tokens": 900,
+        "max_tokens": 1400,
+        "reasoning": {"effort": "none", "exclude": True},
+        "response_format": {"type": "json_object"},
         "messages": [{
             "role": "user",
             "content": [
@@ -239,13 +241,30 @@ def call_openrouter(image, meta, api_key, model):
         raise RuntimeError(f"O modelo recusou a análise: {str(message['refusal'])[:500]}")
 
     content = message.get("content")
-    if content is None and message.get("reasoning"):
-        raise RuntimeError("O modelo devolveu raciocínio, mas não devolveu o resultado textual. Experimenta outro modelo compatível com imagens.")
+    finish = first.get("finish_reason", "desconhecido")
+    if content is None or content == "":
+        if message.get("reasoning") or message.get("reasoning_details"):
+            raise RuntimeError(
+                "O modelo enviou raciocínio, mas não enviou a resposta final. "
+                "A aplicação já solicitou reasoning desativado e JSON. "
+                "Verifica se OPENROUTER_MODEL aponta para um modelo de visão "
+                "compatível com JSON; não alteres a chave API. "
+                f"(finish_reason: {finish})"
+            )
+        raise RuntimeError(
+            f"O modelo devolveu conteúdo vazio (finish_reason: {finish}). "
+            "Pode ter atingido o limite de geração ou o endpoint não suportar a resposta pedida."
+        )
+
     try:
-        return validate_result(parse_json(content))
+        parsed = parse_json(content)
+        return validate_result(parsed)
     except ValueError as exc:
-        finish = first.get("finish_reason", "desconhecido")
-        raise RuntimeError(f"Resposta inválida/incompleta da IA: {exc} (finish_reason: {finish}).") from exc
+        preview = str(content)[:350].replace("\n", " ")
+        raise RuntimeError(
+            f"Resposta inválida/incompleta da IA: {exc} "
+            f"(finish_reason: {finish}; início da resposta: {preview})"
+        ) from exc
 
 
 def show_result(result):
@@ -263,7 +282,7 @@ def show_result(result):
 
 db_init()
 st.markdown(
-    f'<div class="hero"><div class="small">V9.2 · AI TRADING CHART ANALYZER</div>'
+    f'<div class="hero"><div class="small">V9.3 · AI TRADING CHART ANALYZER</div>'
     f'<h1>🦁 {APP}</h1><span class="small">Análise técnica de gráficos por imagem</span></div>',
     unsafe_allow_html=True,
 )
