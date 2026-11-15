@@ -143,63 +143,61 @@ def validate_result(data):
         "signal": signal, "confidence": round(confidence, 1),
         "buy_score": round(buy_score, 1), "sell_score": round(sell_score, 1),
         "entry": str(data.get("entry") or "").strip(),
+        "trigger": str(data.get("trigger") or "").strip(),
         "sl": str(data.get("stop_loss") or data.get("sl") or "").strip(),
         "tp": str(data.get("take_profit") or data.get("tp") or "").strip(),
+        "invalidation": str(data.get("invalidation") or "").strip(),
+        "setup": str(data.get("setup") or "").strip(),
         "reason": str(data.get("reason") or "").strip()
     }
 
-    # Validação independente: impede que o modelo ignore os limiares pedidos.
     if signal == "BUY" and (buy_score < 65 or buy_score - sell_score < 10):
         raise ValueError("BUY recusado: pontuação abaixo do mínimo ou sem vantagem suficiente.")
     if signal == "SELL" and (sell_score < 65 or sell_score - buy_score < 10):
         raise ValueError("SELL recusado: pontuação abaixo do mínimo ou sem vantagem suficiente.")
     if signal == "AGUARDAR":
-        result.update(entry="", sl="", tp="")
+        result.update(entry="", trigger="", sl="", tp="", invalidation="")
         return result
-    if not all((result["entry"], result["sl"], result["tp"])):
-        raise ValueError("BUY/SELL sem entrada futura, Stop Loss e Take Profit. Sinal recusado.")
+    if not all((result["entry"], result["trigger"], result["sl"], result["tp"], result["invalidation"])):
+        raise ValueError("BUY/SELL sem gatilho, entrada, SL, TP e condição de invalidação. Sinal recusado.")
     return result
 
 
 def make_prompt(meta):
     return f"""
-És o analista técnico do DONCULLER-TRADE47. Analisa o screenshot e responde em português.
+És o analista técnico do DONCULLER-TRADE47. Analisa APENAS o screenshot.
+Responde em português, com linguagem directa e operacional.
 Mercado: {meta['market']} | Ativo: {meta['asset']}
 Plataforma: {meta['platform']} | Timeframe: {meta['timeframe']}
 
-MÉTODO:
-1. Identifica tendência recente: alta, baixa ou lateral.
-2. Avalia estrutura HH/HL ou LH/LL, suportes/resistências e reacção do preço.
-3. Avalia velas, rompimento/reteste e momentum.
-4. Considera RSI, MACD, médias móveis, Fractals e Zig Zag APENAS se estiverem
-   claramente visíveis. Não inventes indicadores nem valores.
-5. Em Boom/Crash, não escolhas uma direcção pelo nome do activo nem pela
-   expectativa de spike. Usa apenas a evidência visível.
-6. Não confundas uma recuperação curta com inversão confirmada.
+LEITURA:
+- Verifica a legibilidade do gráfico, escala de preços e velas recentes.
+- Distingue tendência principal do movimento de curto prazo.
+- Avalia HH/HL, LH/LL, lateralização, suportes/resistências, rejeição,
+  rompimento/reteste, pullback e momentum.
+- Usa RSI, MACD, médias móveis, Fractals e Zig Zag apenas se visíveis.
+- Não inventes preços, indicadores, velas ou níveis.
+- Em Boom/Crash/Jump, não escolhas direcção pelo nome do activo.
 
-PONTUAÇÃO EQUILIBRADA:
-Avalia BUY e SELL separadamente, sem favorecer AGUARDAR por defeito.
-Atribui pontuação de 0 a 100 a cada lado:
-- Tendência e estrutura: até 30.
-- Zona técnica, suporte/resistência, rompimento/reteste: até 25.
-- Velas e momentum: até 25.
-- Confluência de indicadores que estejam visíveis: até 20.
-Não dês pontos por indicadores ausentes. Pontuação é força da evidência
-visual, NÃO probabilidade real de lucro.
+AVALIAÇÃO:
+Avalia separadamente o melhor cenário BUY e o melhor cenário SELL.
+Pontua cada lado (0–100): estrutura/tendência até 30; zona técnica até 25;
+velas/momentum até 25; confluência de indicadores visíveis até 20.
+Não pontues indicadores ausentes. Pontuação não é probabilidade de lucro.
 
 DECISÃO:
-- BUY se buy_score >= 65 e buy_score exceder sell_score em pelo menos 10,
-  com entrada futura condicional, SL e TP coerentes e visíveis.
-- SELL se sell_score >= 65 e sell_score exceder buy_score em pelo menos 10,
-  com entrada futura condicional, SL e TP coerentes e visíveis.
-- AGUARDAR se nenhum lado cumprir esses critérios ou se o gráfico não
-  permitir definir níveis com segurança.
-- Não escolhas AGUARDAR só porque o preço já se moveu muito: procura uma
-  possível entrada futura após pullback, reteste ou quebra confirmada.
-  Não persigas o preço.
-- A entrada deve indicar uma condição futura objectiva. SL invalida a ideia;
-  TP aponta para uma zona técnica seguinte. Não inventes números.
-- confidence mede a qualidade da evidência visual, não taxa de acerto.
+- BUY somente com buy_score >= 65 e vantagem >= 10 sobre SELL, além de
+  plano futuro completo e coerente.
+- SELL somente com sell_score >= 65 e vantagem >= 10 sobre BUY, além de
+  plano futuro completo e coerente.
+- Caso contrário, AGUARDAR. Não escolhas AGUARDAR automaticamente:
+  procura explicitamente continuação e reversão, mas exige confirmação.
+- Não persigas o preço. O gatilho tem de ser futuro e objectivo, por exemplo
+  fecho de vela além de nível e reteste/rejeição.
+- Para BUY/SELL, entrada, SL e TP devem ser preços legíveis na escala.
+  Se não forem legíveis, escolhe AGUARDAR em vez de inventar.
+- SL invalida a estrutura; TP aponta para a próxima zona técnica visível.
+- confidence mede qualidade da evidência visual, nunca taxa de acerto.
 
 Responde APENAS com JSON válido:
 {{
@@ -207,13 +205,16 @@ Responde APENAS com JSON válido:
  "confidence":0,
  "buy_score":0,
  "sell_score":0,
- "entry":"",
- "stop_loss":"",
- "take_profit":"",
- "reason":""
+ "setup":"continuação, reversão ou lateral",
+ "trigger":"condição objectiva antes da entrada",
+ "entry":"preço/zona de entrada",
+ "stop_loss":"preço",
+ "take_profit":"preço",
+ "invalidation":"condição que invalida a ideia",
+ "reason":"resumo curto da estrutura e confirmações/ausências"
 }}
-Em AGUARDAR, entry, stop_loss e take_profit ficam vazios.
-Em BUY/SELL, preenche os três com níveis legíveis e fundamentados.
+Em AGUARDAR, trigger, entry, stop_loss, take_profit e invalidation ficam vazios.
+Em BUY/SELL, todos esses campos têm de estar preenchidos com dados legíveis.
 """.strip()
 
 
@@ -294,14 +295,17 @@ def show_result(result):
     if result["reason"]:
         st.write(result["reason"])
     if signal in ("BUY", "SELL"):
+        st.markdown(f"**Configuração:** {result['setup'] or 'Não especificada'}")
+        st.markdown(f"**Gatilho de activação:** {result['trigger']}")
         st.markdown(f"**Entrada futura:** {result['entry']}")
         st.markdown(f"**Stop Loss:** {result['sl']}")
         st.markdown(f"**Take Profit:** {result['tp']}")
+        st.markdown(f"**Invalidação:** {result['invalidation']}")
 
 
 db_init()
 st.markdown(
-    f'<div class="hero"><div class="small">V9.4 · AVALIAÇÃO EQUILIBRADA BUY/SELL</div>'
+    f'<div class="hero"><div class="small">V9.5 · PLANOS BUY/SELL E ENTRADAS CONDICIONAIS</div>'
     f'<h1>🦁 {APP}</h1><span class="small">Análise técnica de gráficos por imagem</span></div>',
     unsafe_allow_html=True
 )
@@ -345,12 +349,12 @@ with right:
                 try:
                     result = call_openrouter(preview, meta, api_key, model.strip())
                     save_result(meta, result)
-                    st.session_state["v94_result"] = result
-                    st.session_state["v94_meta"] = meta
+                    st.session_state["v95_result"] = result
+                    st.session_state["v95_meta"] = meta
                 except Exception as exc:
-                    st.session_state.pop("v94_result", None)
+                    st.session_state.pop("v95_result", None)
                     st.error(str(exc))
-    current_result = st.session_state.get("v94_result")
+    current_result = st.session_state.get("v95_result")
     if current_result:
         show_result(current_result)
     else:
