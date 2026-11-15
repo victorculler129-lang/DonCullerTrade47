@@ -151,10 +151,11 @@ def validate_result(data):
         "reason": str(data.get("reason") or "").strip()
     }
 
-    if signal == "BUY" and (buy_score < 65 or buy_score - sell_score < 10):
-        raise ValueError("BUY recusado: pontuação abaixo do mínimo ou sem vantagem suficiente.")
-    if signal == "SELL" and (sell_score < 65 or sell_score - buy_score < 10):
-        raise ValueError("SELL recusado: pontuação abaixo do mínimo ou sem vantagem suficiente.")
+    # Limiares moderados: permitem reconhecer tendências claras sem forçar sinais.
+    if signal == "BUY" and (buy_score < 55 or buy_score - sell_score < 5):
+        raise ValueError("BUY recusado: evidência insuficiente ou sem vantagem mínima.")
+    if signal == "SELL" and (sell_score < 55 or sell_score - buy_score < 5):
+        raise ValueError("SELL recusado: evidência insuficiente ou sem vantagem mínima.")
     if signal == "AGUARDAR":
         result.update(entry="", trigger="", sl="", tp="", invalidation="")
         return result
@@ -165,39 +166,57 @@ def validate_result(data):
 
 def make_prompt(meta):
     return f"""
-És o analista técnico do DONCULLER-TRADE47. Analisa APENAS o screenshot.
-Responde em português, com linguagem directa e operacional.
-Mercado: {meta['market']} | Ativo: {meta['asset']}
+És o analista técnico do DONCULLER-TRADE47. Analisa APENAS a imagem enviada.
+Responde em português, de forma objectiva e operacional.
+Mercado: {meta['market']} | Activo: {meta['asset']}
 Plataforma: {meta['platform']} | Timeframe: {meta['timeframe']}
 
-LEITURA:
-- Verifica a legibilidade do gráfico, escala de preços e velas recentes.
-- Distingue tendência principal do movimento de curto prazo.
-- Avalia HH/HL, LH/LL, lateralização, suportes/resistências, rejeição,
-  rompimento/reteste, pullback e momentum.
-- Usa RSI, MACD, médias móveis, Fractals e Zig Zag apenas se visíveis.
-- Não inventes preços, indicadores, velas ou níveis.
-- Em Boom/Crash/Jump, não escolhas direcção pelo nome do activo.
+OBJECTIVO PRINCIPAL:
+Identificar a direcção dominante e reconhecer oportunidades BUY e SELL reais.
+Não confundas ausência de indicadores com ausência de tendência: o preço e a
+estrutura das velas são suficientes para avaliar tendência quando legíveis.
+Não escolhas AGUARDAR por defeito e não exijas sempre rompimento + reteste
+quando já existir uma tendência clara e um pullback negociável.
 
-AVALIAÇÃO:
-Avalia separadamente o melhor cenário BUY e o melhor cenário SELL.
-Pontua cada lado (0–100): estrutura/tendência até 30; zona técnica até 25;
-velas/momentum até 25; confluência de indicadores visíveis até 20.
-Não pontues indicadores ausentes. Pontuação não é probabilidade de lucro.
+ANÁLISE OBRIGATÓRIA:
+1. Determina a tendência pela sequência dos últimos swings visíveis:
+   topos/fundos ascendentes = tendência de alta;
+   topos/fundos descendentes = tendência de baixa;
+   alternância sem sequência = lateral/indefinida.
+2. Dá maior peso à estrutura recente, mas considera o contexto anterior.
+3. Identifica pullbacks, rejeições, rompimentos, retestes e zonas de suporte/resistência.
+4. RSI, MACD, médias móveis, Fractals e Zig Zag só contam se estiverem visíveis.
+5. Não escolhas a direcção pelo nome Boom, Crash ou Jump.
+6. Se a tendência for clara mas o preço estiver demasiado esticado, indica entrada
+   condicional após pullback; não transformes automaticamente isso em AGUARDAR.
 
-DECISÃO:
-- BUY somente com buy_score >= 65 e vantagem >= 10 sobre SELL, além de
-  plano futuro completo e coerente.
-- SELL somente com sell_score >= 65 e vantagem >= 10 sobre BUY, além de
-  plano futuro completo e coerente.
-- Caso contrário, AGUARDAR. Não escolhas AGUARDAR automaticamente:
-  procura explicitamente continuação e reversão, mas exige confirmação.
-- Não persigas o preço. O gatilho tem de ser futuro e objectivo, por exemplo
-  fecho de vela além de nível e reteste/rejeição.
-- Para BUY/SELL, entrada, SL e TP devem ser preços legíveis na escala.
-  Se não forem legíveis, escolhe AGUARDAR em vez de inventar.
-- SL invalida a estrutura; TP aponta para a próxima zona técnica visível.
-- confidence mede qualidade da evidência visual, nunca taxa de acerto.
+PONTUAÇÃO SEPARADA (0–100):
+- Direcção e estrutura de tendência: até 35 pontos.
+- Qualidade do swing/pullback e zona: até 25 pontos.
+- Velas e momentum visíveis: até 25 pontos.
+- Indicadores visíveis e confluência: até 15 pontos.
+Não retires pontos só porque não existem indicadores no screenshot. Não inventes
+informação que não esteja visível. A pontuação é força técnica, não probabilidade
+estatística de lucro.
+
+REGRA DE SINAL:
+- BUY quando buy_score >= 55 e superar sell_score em pelo menos 5 pontos,
+  com estrutura de alta ou reversão de alta confirmada e entrada condicional válida.
+- SELL quando sell_score >= 55 e superar buy_score em pelo menos 5 pontos,
+  com estrutura de baixa ou reversão de baixa confirmada e entrada condicional válida.
+- AGUARDAR apenas quando a estrutura for lateral/contraditória, a imagem não
+  permitir ler o preço, ou não existir um plano com invalidação técnica clara.
+- Uma tendência descendente clara pode justificar SELL mesmo sem RSI/MACD.
+  Uma tendência ascendente clara pode justificar BUY mesmo sem RSI/MACD.
+- Não entrar depois de uma vela impulsiva já muito extensa. Nesse caso, fornece
+  gatilho futuro de pullback/rejeição na direcção da tendência.
+
+PLANO DE OPERAÇÃO:
+Para BUY/SELL, fornece gatilho futuro objectivo, entrada, SL e TP com base em
+preços/níveis legíveis na imagem. SL deve ficar além do swing que invalida a ideia;
+TP deve apontar para a próxima zona técnica visível. Não inventes casas decimais.
+Se não conseguires ler preços exactos, usa uma zona descrita por referência visual
+apenas se for inequívoca; caso contrário AGUARDAR. Nunca digas que é garantido.
 
 Responde APENAS com JSON válido:
 {{
@@ -205,16 +224,16 @@ Responde APENAS com JSON válido:
  "confidence":0,
  "buy_score":0,
  "sell_score":0,
- "setup":"continuação, reversão ou lateral",
- "trigger":"condição objectiva antes da entrada",
- "entry":"preço/zona de entrada",
- "stop_loss":"preço",
- "take_profit":"preço",
- "invalidation":"condição que invalida a ideia",
- "reason":"resumo curto da estrutura e confirmações/ausências"
+ "setup":"continuação, pullback ou reversão",
+ "trigger":"condição objectiva que tem de acontecer antes da entrada",
+ "entry":"preço ou zona de entrada condicional",
+ "stop_loss":"nível de invalidação/SL",
+ "take_profit":"próxima zona técnica/TP",
+ "invalidation":"condição que invalida a configuração",
+ "reason":"explica a tendência dominante e por que o sinal foi escolhido"
 }}
 Em AGUARDAR, trigger, entry, stop_loss, take_profit e invalidation ficam vazios.
-Em BUY/SELL, todos esses campos têm de estar preenchidos com dados legíveis.
+Em BUY/SELL, todos esses campos devem estar preenchidos e coerentes.
 """.strip()
 
 
@@ -305,7 +324,7 @@ def show_result(result):
 
 db_init()
 st.markdown(
-    f'<div class="hero"><div class="small">V9.5 · PLANOS BUY/SELL E ENTRADAS CONDICIONAIS</div>'
+    f'<div class="hero"><div class="small">V10.0 · DETECÇÃO DE TENDÊNCIA E ENTRADAS CONDICIONAIS</div>'
     f'<h1>🦁 {APP}</h1><span class="small">Análise técnica de gráficos por imagem</span></div>',
     unsafe_allow_html=True
 )
@@ -349,12 +368,12 @@ with right:
                 try:
                     result = call_openrouter(preview, meta, api_key, model.strip())
                     save_result(meta, result)
-                    st.session_state["v95_result"] = result
-                    st.session_state["v95_meta"] = meta
+                    st.session_state["v10_result"] = result
+                    st.session_state["v10_meta"] = meta
                 except Exception as exc:
-                    st.session_state.pop("v95_result", None)
+                    st.session_state.pop("v10_result", None)
                     st.error(str(exc))
-    current_result = st.session_state.get("v95_result")
+    current_result = st.session_state.get("v10_result")
     if current_result:
         show_result(current_result)
     else:
