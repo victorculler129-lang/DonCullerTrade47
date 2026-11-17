@@ -189,8 +189,8 @@ def validate_result(data):
     }
 
     # A decisão é calculada pela aplicação, não aceite cegamente do modelo.
-    minimum_score = 52
-    minimum_advantage = 6
+    minimum_score = 48
+    minimum_advantage = 4
     difference = buy_score - sell_score
     if buy_score >= minimum_score and difference >= minimum_advantage:
         candidate = "BUY"
@@ -199,8 +199,10 @@ def validate_result(data):
     else:
         candidate = "AGUARDAR"
 
+    # V13: invalidação pode ser descrita no gatilho/SL; não deve bloquear
+    # uma oportunidade se entrada, gatilho, SL e TP estiverem definidos.
     complete_plan = all((result["entry"], result["trigger"], result["sl"],
-                         result["tp"], result["invalidation"]))
+                         result["tp"]))
     if candidate in ("BUY", "SELL") and complete_plan:
         result["signal"] = candidate
     else:
@@ -224,7 +226,9 @@ Plataforma: {meta['platform']} | Timeframe: {meta['timeframe']}
 OBJECTIVO:
 Encontrar a melhor oportunidade FUTURA, BUY ou SELL. Compara obrigatoriamente
 os dois lados. Não escolhas AGUARDAR por hábito quando existir uma configuração
-técnica negociável.
+técnica negociável. Esta versão é menos conservadora: procura setups de
+continuação, pullback e rejeição com plano condicional, sem exigir confirmação
+perfeita nem vários filtros simultâneos.
 
 LEITURA:
 - HH/HL favorecem BUY; LH/LL favorecem SELL.
@@ -232,6 +236,10 @@ LEITURA:
 - RSI, MACD, médias móveis, Fractals e Zig Zag só contam se estiverem visíveis.
 - Não escolhas a direcção pelo nome Boom/Crash/Jump.
 - Não retires pontos apenas porque faltam indicadores.
+- Dá prioridade à estrutura e price action visíveis; indicadores são confirmação,
+  não requisito obrigatório.
+- Não exijas rompimento e reteste simultaneamente se um pullback/rejeição já
+  oferecer gatilho e risco claramente definidos.
 - Não inventes preços, níveis, indicadores ou padrões.
 
 PONTUAÇÃO OBRIGATÓRIA (0–100, separada):
@@ -247,8 +255,10 @@ DECISÃO:
 - Escolhe SELL se o cenário de baixa for superior e tiver plano condicional válido.
 - Não exijas sempre rompimento e reteste simultaneamente.
 - Se a tendência estiver esticada, procura entrada futura após pullback/rejeição.
-- AGUARDAR apenas se o gráfico estiver lateral/contraditório, ilegível ou
-  nenhum lado permitir definir entrada, SL e TP tecnicamente.
+- AGUARDAR apenas se o gráfico estiver ilegível, muito contraditório/lateral,
+  ou se não for possível definir entrada, gatilho, SL e TP coerentes.
+- Se houver uma vantagem moderada mas negociável, apresenta BUY/SELL
+  CONDICIONAL e explica exatamente o que tem de acontecer antes da entrada.
 - Não inventes sinal só para evitar AGUARDAR.
 
 PLANO PARA BUY/SELL:
@@ -274,7 +284,8 @@ Responde APENAS com JSON válido:
  "invalidation":"condição que cancela a ideia",
  "reason":"justificação curta da direcção escolhida"
 }}
-Em BUY/SELL, todos os campos do plano devem estar preenchidos.
+Em BUY/SELL, entrada, gatilho, stop_loss e take_profit devem estar preenchidos.
+A invalidação é desejável, mas pode repetir a condição do SL se necessário.
 Em AGUARDAR, os campos do plano ficam vazios.
 """.strip()
 
@@ -366,7 +377,7 @@ def show_result(result):
 
 db_init()
 st.markdown(
-    f'<div class="hero"><div class="small">V12.0 · BUY/SELL + CONTROLO DE WINNERS/LOSSES</div>'
+    f'<div class="hero"><div class="small">V13.0 · MOTOR DE DECISÃO MENOS CONSERVADOR + WINNERS/LOSSES</div>'
     f'<h1>🦁 {APP}</h1><span class="small">Análise técnica de gráficos por imagem</span></div>',
     unsafe_allow_html=True
 )
