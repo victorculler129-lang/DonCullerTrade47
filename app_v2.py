@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 APP = 'DONCULLER-TRADE47'
 VERSION = 'V16.0'
 OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-DERIV_WS = os.getenv('DERIV_WS_URL', 'wss://ws.derivws.com/websockets/v3?app_id=1089')
+DERIV_WS = os.getenv('DERIV_WS_URL', 'wss://api.derivws.com/trading/v1/options/ws/public')
 MODEL_DEFAULT = os.getenv('OPENROUTER_MODEL', 'nvidia/nemotron-3.5-super-vl:free').strip()
 GRANULARITY = {'M1':60,'M2':120,'M3':180,'M5':300,'M10':600,'M15':900,'M30':1800,'H1':3600,'H2':7200,'H4':14400,'D1':86400}
 
@@ -41,21 +41,37 @@ TIMEFRAMES=list(GRANULARITY)
 
 
 def deriv_request(payload, timeout=18):
-    ws = websocket.create_connection(DERIV_WS, timeout=timeout, enable_multithread=False)
+    ws = None
     try:
+        # Endpoint público oficial actual: apenas dados de mercado, sem login.
+        ws = websocket.create_connection(
+            DERIV_WS, timeout=timeout, enable_multithread=False,
+            origin='https://api.derivws.com'
+        )
         ws.send(json.dumps(payload))
-        deadline=time.time()+timeout
-        while time.time()<deadline:
-            raw=ws.recv()
-            if not raw: continue
-            msg=json.loads(raw)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            raw = ws.recv()
+            if not raw:
+                continue
+            msg = json.loads(raw)
             if msg.get('error'):
-                raise RuntimeError(msg['error'].get('message','Erro na API Deriv'))
+                err = msg['error']
+                raise RuntimeError(err.get('message', 'Erro na API pública da Deriv'))
             if msg.get('msg_type'):
                 return msg
-        raise RuntimeError('Tempo esgotado ao consultar a Deriv.')
+        raise RuntimeError('A Deriv não respondeu dentro do tempo limite.')
+    except websocket.WebSocketBadStatusException as exc:
+        status = getattr(exc, 'status_code', None)
+        raise RuntimeError(f'A Deriv recusou a ligação pública (HTTP {status or "desconhecido"}). Verifica a disponibilidade da API e tenta novamente.') from exc
+    except (websocket.WebSocketException, OSError) as exc:
+        raise RuntimeError(f'Não foi possível estabelecer ligação à Deriv: {exc}.') from exc
     finally:
-        ws.close()
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_deriv_symbols():
