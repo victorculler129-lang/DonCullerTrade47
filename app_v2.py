@@ -11,7 +11,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 APP = "DONCULLER-TRADE47"
-APP_VERSION = "V14.0"
+APP_VERSION = "V15.0"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL_DEFAULT = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-super-vl:free").strip()
 DB_PATH = os.getenv("DONCULLER_DB_PATH", "donculler_history.db")
@@ -162,7 +162,7 @@ def _price_number(value):
     if not value:
         return None
     text = str(value).strip().replace(" ", "")
-    matches = re.findall(r"(?<![A-Za-z])[-+]?(?:\\d{1,3}(?:[.,]\\d{3})+|\\d+)(?:[.,]\\d+)?", text)
+    matches = re.findall(r"(?<![A-Za-z])[-+]?(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,]\d+)?", text)
     if len(matches) != 1:
         return None
     token = matches[0]
@@ -213,8 +213,10 @@ def validate_result(data):
     }
 
     # A decisão é calculada pela aplicação, não aceite cegamente do modelo.
-    minimum_score = 52
-    minimum_advantage = 6
+    # Decisão equilibrada: pontuação mínima moderada + vantagem clara.
+    # Não exige uma pontuação artificialmente alta nem favorece BUY/SELL.
+    minimum_score = 50
+    minimum_advantage = 5
     difference = buy_score - sell_score
     if buy_score >= minimum_score and difference >= minimum_advantage:
         candidate = "BUY"
@@ -225,8 +227,11 @@ def validate_result(data):
 
     # V13: invalidação pode ser descrita no gatilho/SL; não deve bloquear
     # uma oportunidade se entrada, gatilho, SL e TP estiverem definidos.
+    # Só a evidência do lado escolhido é obrigatória. Exigir texto dos DOIS
+    # lados fazia o modelo falhar mesmo quando o setup vencedor estava completo.
+    chosen_evidence = result["buy_evidence"] if candidate == "BUY" else result["sell_evidence"]
     complete_plan = all((result["entry"], result["trigger"], result["sl"],
-                         result["tp"], result["buy_evidence"], result["sell_evidence"]))
+                         result["tp"], chosen_evidence))
     entry_n = _price_number(result["entry"])
     sl_n = _price_number(result["sl"])
     tp_n = _price_number(result["tp"])
@@ -242,6 +247,8 @@ def validate_result(data):
 
     if candidate in ("BUY", "SELL") and complete_plan and levels_valid:
         result["signal"] = candidate
+        # Calcula RR localmente; não depende do texto livre do modelo.
+        result["risk_reward"] = f"1:{(abs(tp_n-entry_n)/abs(entry_n-sl_n) if candidate == 'BUY' else abs(entry_n-tp_n)/abs(sl_n-entry_n)):.2f}"
     else:
         result.update(signal="AGUARDAR", entry="", trigger="", sl="",
                       tp="", invalidation="")
@@ -276,9 +283,13 @@ Considera EMA, RSI, MACD, ATR, Fractals e Zig Zag apenas quando identificáveis.
 Não inventes valores nem afirmes cálculos de indicadores que não estão visíveis.
 
 PONTUAÇÃO:
-buy_score e sell_score separados, 0–100. Mede força da evidência visual,
-NÃO probabilidade de vitória. Estrutura até 35; zona/swing até 25;
-velas/momentum até 25; indicadores visíveis até 15.
+buy_score e sell_score separados, 0–100. Mede força relativa da evidência
+visual, NÃO probabilidade de vitória. Não uses 0/0 nem pontuações extremas
+sem justificação. Pontua estrutura (0–35), zona/swing (0–25),
+velas/momentum (0–25) e indicadores realmente visíveis (0–15).
+Compara os dois cenários: se um lado tiver vantagem técnica real, assume-o;
+não uses AGUARDAR como resposta padrão. AGUARDAR é para conflito, falta de
+estrutura ou falta de níveis legíveis, não para evitar tomar uma decisão.
 
 VALIDAÇÃO:
 - BUY: SL abaixo da entrada e TP acima da entrada.
@@ -287,8 +298,11 @@ VALIDAÇÃO:
 - Usa três preços numéricos únicos e legíveis. Não inventes valores.
 - Se os preços não forem legíveis, deixa entry, stop_loss e take_profit vazios.
 - A entrada deve ser futura e condicional; indica o gatilho objectivo.
-- AGUARDAR quando os cenários forem fracos/contraditórios ou não houver
-  níveis verificáveis. Não escolhas BUY/SELL apenas para evitar AGUARDAR.
+- Se BUY ou SELL tiver evidência superior e coerente, escolhe esse lado.
+- AGUARDAR apenas quando os dois lados estiverem equilibrados/contraditórios,
+  o mercado estiver sem estrutura ou não houver níveis legíveis.
+- Não exijas confirmação perfeita: uma estrutura + gatilho objetivo + risco
+  controlado podem formar setup válido; descreve o que ainda falta activar.
 - Não prometas taxa de acerto.
 
 Responde APENAS com JSON válido:
@@ -403,7 +417,7 @@ def show_result(result):
 
 db_init()
 st.markdown(
-    f'<div class="hero"><div class="small">V14.0 · ANÁLISE COMPARATIVA + VALIDAÇÃO DE RISCO</div>'
+    f'<div class="hero"><div class="small">V15.0 · DECISÃO EQUILIBRADA + VALIDAÇÃO DE RISCO</div>'
     f'<h1>🦁 {APP}</h1><span class="small">Análise comparativa de gráficos por imagem · níveis validados</span></div>',
     unsafe_allow_html=True
 )
