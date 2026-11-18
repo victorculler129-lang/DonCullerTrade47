@@ -11,6 +11,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 APP = "DONCULLER-TRADE47"
+APP_VERSION = "V14.0"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL_DEFAULT = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-super-vl:free").strip()
 DB_PATH = os.getenv("DONCULLER_DB_PATH", "donculler_history.db")
@@ -156,6 +157,25 @@ def parse_json(content):
     raise ValueError("A resposta textual não contém um objeto JSON válido.")
 
 
+def _price_number(value):
+    """Extrai um preço único; intervalos e textos ambíguos não são adivinhados."""
+    if not value:
+        return None
+    text = str(value).strip().replace(" ", "")
+    matches = re.findall(r"(?<![A-Za-z])[-+]?(?:\\d{1,3}(?:[.,]\\d{3})+|\\d+)(?:[.,]\\d+)?", text)
+    if len(matches) != 1:
+        return None
+    token = matches[0]
+    if "," in token and "." in token:
+        token = token.replace(".", "").replace(",", ".") if token.rfind(",") > token.rfind(".") else token.replace(",", "")
+    elif "," in token:
+        token = token.replace(",", ".")
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
 def validate_result(data):
     if not isinstance(data, dict):
         raise ValueError("O JSON devolvido não é um objecto.")
@@ -185,12 +205,16 @@ def validate_result(data):
         "tp": str(data.get("take_profit") or data.get("tp") or "").strip(),
         "invalidation": str(data.get("invalidation") or "").strip(),
         "setup": str(data.get("setup") or "").strip(),
-        "reason": str(data.get("reason") or "").strip()
+        "reason": str(data.get("reason") or "").strip(),
+        "market_state": str(data.get("market_state") or "").strip(),
+        "buy_evidence": str(data.get("buy_evidence") or "").strip(),
+        "sell_evidence": str(data.get("sell_evidence") or "").strip(),
+        "risk_reward": str(data.get("risk_reward") or "").strip()
     }
 
     # A decisão é calculada pela aplicação, não aceite cegamente do modelo.
-    minimum_score = 48
-    minimum_advantage = 4
+    minimum_score = 52
+    minimum_advantage = 6
     difference = buy_score - sell_score
     if buy_score >= minimum_score and difference >= minimum_advantage:
         candidate = "BUY"
@@ -202,92 +226,90 @@ def validate_result(data):
     # V13: invalidação pode ser descrita no gatilho/SL; não deve bloquear
     # uma oportunidade se entrada, gatilho, SL e TP estiverem definidos.
     complete_plan = all((result["entry"], result["trigger"], result["sl"],
-                         result["tp"]))
-    if candidate in ("BUY", "SELL") and complete_plan:
+                         result["tp"], result["buy_evidence"], result["sell_evidence"]))
+    entry_n = _price_number(result["entry"])
+    sl_n = _price_number(result["sl"])
+    tp_n = _price_number(result["tp"])
+    levels_valid = False
+    if None not in (entry_n, sl_n, tp_n):
+        if candidate == "BUY":
+            risk, reward = entry_n - sl_n, tp_n - entry_n
+        elif candidate == "SELL":
+            risk, reward = sl_n - entry_n, entry_n - tp_n
+        else:
+            risk = reward = -1
+        levels_valid = risk > 0 and reward > 0 and reward / risk >= 1.3
+
+    if candidate in ("BUY", "SELL") and complete_plan and levels_valid:
         result["signal"] = candidate
     else:
         result.update(signal="AGUARDAR", entry="", trigger="", sl="",
                       tp="", invalidation="")
         if not result["reason"]:
             result["reason"] = (
-                "Não existe vantagem técnica suficiente ou falta um plano "
-                "de entrada futura com SL e TP verificáveis."
+                "A vantagem técnica, as evidências ou a coerência matemática "
+                "dos níveis não passaram na validação."
             )
+        if candidate in ("BUY", "SELL") and not levels_valid:
+            result["reason"] += " Não foi possível confirmar níveis coerentes e risco/retorno mínimo de 1:1,3."
     return result
 
 
 def make_prompt(meta):
     return f"""
-És o analista técnico principal do DONCULLER-TRADE47.
-Analisa APENAS o screenshot. Responde em português simples e operacional.
+És o analista técnico principal do DONCULLER-TRADE47 {APP_VERSION}.
+Analisa APENAS o screenshot recebido. Responde em português simples e operacional.
 Mercado: {meta['market']} | Activo: {meta['asset']}
 Plataforma: {meta['platform']} | Timeframe: {meta['timeframe']}
 
-OBJECTIVO:
-Encontrar a melhor oportunidade FUTURA, BUY ou SELL. Compara obrigatoriamente
-os dois lados. Não escolhas AGUARDAR por hábito quando existir uma configuração
-técnica negociável. Esta versão é menos conservadora: procura setups de
-continuação, pullback e rejeição com plano condicional, sem exigir confirmação
-perfeita nem vários filtros simultâneos.
+MÉTODO:
+1. Descreve estado do mercado, tendência, lateralização e estrutura HH/HL ou
+   LH/LL, apenas quando visíveis.
+2. Avalia BUY e SELL separadamente antes de escolher.
+3. Compara estrutura, suporte/resistência, velas, momentum e indicadores visíveis.
+4. Distingue continuação, pullback e reversão. Uma vela isolada não confirma
+   reversão. Identifica se o gatilho ainda é futuro ou já ocorreu.
+5. Nunca favoreças um lado pelo nome do activo.
 
-LEITURA:
-- HH/HL favorecem BUY; LH/LL favorecem SELL.
-- Avalia tendência, pullback, rejeição, rompimento, reteste, zonas, velas e momentum.
-- RSI, MACD, médias móveis, Fractals e Zig Zag só contam se estiverem visíveis.
-- Não escolhas a direcção pelo nome Boom/Crash/Jump.
-- Não retires pontos apenas porque faltam indicadores.
-- Dá prioridade à estrutura e price action visíveis; indicadores são confirmação,
-  não requisito obrigatório.
-- Não exijas rompimento e reteste simultaneamente se um pullback/rejeição já
-  oferecer gatilho e risco claramente definidos.
-- Não inventes preços, níveis, indicadores ou padrões.
+INDICADORES:
+Considera EMA, RSI, MACD, ATR, Fractals e Zig Zag apenas quando identificáveis.
+Não inventes valores nem afirmes cálculos de indicadores que não estão visíveis.
 
-PONTUAÇÃO OBRIGATÓRIA (0–100, separada):
-- Estrutura/tendência: até 35.
-- Zona, swing e pullback: até 25.
-- Velas e momentum: até 25.
-- Indicadores visíveis: até 15.
-Devolve dois números reais entre 0 e 100; não uses zero/zero por defeito.
-Pontuação é força técnica, NÃO percentagem de vitória.
+PONTUAÇÃO:
+buy_score e sell_score separados, 0–100. Mede força da evidência visual,
+NÃO probabilidade de vitória. Estrutura até 35; zona/swing até 25;
+velas/momentum até 25; indicadores visíveis até 15.
 
-DECISÃO:
-- Escolhe BUY se o cenário de alta for superior e tiver plano condicional válido.
-- Escolhe SELL se o cenário de baixa for superior e tiver plano condicional válido.
-- Não exijas sempre rompimento e reteste simultaneamente.
-- Se a tendência estiver esticada, procura entrada futura após pullback/rejeição.
-- AGUARDAR apenas se o gráfico estiver ilegível, muito contraditório/lateral,
-  ou se não for possível definir entrada, gatilho, SL e TP coerentes.
-- Se houver uma vantagem moderada mas negociável, apresenta BUY/SELL
-  CONDICIONAL e explica exatamente o que tem de acontecer antes da entrada.
-- Não inventes sinal só para evitar AGUARDAR.
-
-PLANO PARA BUY/SELL:
-trigger = condição objectiva antes da entrada;
-entry = preço ou zona de entrada futura;
-stop_loss = nível que invalida a ideia, além do swing relevante;
-take_profit = próxima zona técnica visível;
-invalidation = condição que cancela a configuração.
-Usa preços exactos apenas se forem legíveis; caso contrário usa zona visual
-inequívoca. Se nem isso for possível, escolhe AGUARDAR.
+VALIDAÇÃO:
+- BUY: SL abaixo da entrada e TP acima da entrada.
+- SELL: SL acima da entrada e TP abaixo da entrada.
+- Risco/retorno mínimo 1:1,3.
+- Usa três preços numéricos únicos e legíveis. Não inventes valores.
+- Se os preços não forem legíveis, deixa entry, stop_loss e take_profit vazios.
+- A entrada deve ser futura e condicional; indica o gatilho objectivo.
+- AGUARDAR quando os cenários forem fracos/contraditórios ou não houver
+  níveis verificáveis. Não escolhas BUY/SELL apenas para evitar AGUARDAR.
+- Não prometas taxa de acerto.
 
 Responde APENAS com JSON válido:
 {{
- "signal":"BUY ou SELL ou AGUARDAR",
- "confidence":0,
- "buy_score":0,
- "sell_score":0,
- "setup":"continuação, pullback ou reversão",
- "trigger":"condição objectiva antes da entrada",
- "entry":"preço ou zona de entrada futura",
- "stop_loss":"nível de SL",
- "take_profit":"nível de TP",
- "invalidation":"condição que cancela a ideia",
- "reason":"justificação curta da direcção escolhida"
+ "confidence": 0,
+ "buy_score": 0,
+ "sell_score": 0,
+ "market_state": "estado e estrutura visível",
+ "setup": "continuação, pullback, reversão ou indefinido",
+ "buy_evidence": "factores a favor de BUY",
+ "sell_evidence": "factores a favor de SELL",
+ "trigger": "condição objectiva de activação",
+ "entry": "um único preço numérico",
+ "stop_loss": "um único preço numérico",
+ "take_profit": "um único preço numérico",
+ "risk_reward": "relação calculada",
+ "invalidation": "condição que cancela o cenário",
+ "reason": "conclusão comparando os dois lados"
 }}
-Em BUY/SELL, entrada, gatilho, stop_loss e take_profit devem estar preenchidos.
-A invalidação é desejável, mas pode repetir a condição do SL se necessário.
-Em AGUARDAR, os campos do plano ficam vazios.
-""".strip()
+""" .strip()
+
 
 
 def call_openrouter(image, meta, api_key, model):
@@ -367,7 +389,11 @@ def show_result(result):
     if result["reason"]:
         st.write(result["reason"])
     if signal in ("BUY", "SELL"):
+        st.markdown(f"**Estado do mercado:** {result['market_state'] or 'Não especificado'}")
         st.markdown(f"**Configuração:** {result['setup'] or 'Não especificada'}")
+        st.markdown(f"**Evidência BUY:** {result['buy_evidence'] or 'Não especificada'}")
+        st.markdown(f"**Evidência SELL:** {result['sell_evidence'] or 'Não especificada'}")
+        st.markdown(f"**Risco/retorno:** {result['risk_reward'] or 'Não especificado'}")
         st.markdown(f"**Gatilho de activação:** {result['trigger']}")
         st.markdown(f"**Entrada futura:** {result['entry']}")
         st.markdown(f"**Stop Loss:** {result['sl']}")
@@ -377,8 +403,8 @@ def show_result(result):
 
 db_init()
 st.markdown(
-    f'<div class="hero"><div class="small">V13.0 · MOTOR DE DECISÃO MENOS CONSERVADOR + WINNERS/LOSSES</div>'
-    f'<h1>🦁 {APP}</h1><span class="small">Análise técnica de gráficos por imagem</span></div>',
+    f'<div class="hero"><div class="small">V14.0 · ANÁLISE COMPARATIVA + VALIDAÇÃO DE RISCO</div>'
+    f'<h1>🦁 {APP}</h1><span class="small">Análise comparativa de gráficos por imagem · níveis validados</span></div>',
     unsafe_allow_html=True
 )
 
