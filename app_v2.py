@@ -44,9 +44,9 @@ def deriv_request(payload, timeout=18):
     ws = None
     try:
         # Endpoint público oficial actual: apenas dados de mercado, sem login.
+        # Não forçar um cabeçalho Origin artificial: a API pública não o exige.
         ws = websocket.create_connection(
-            DERIV_WS, timeout=timeout, enable_multithread=False,
-            origin='https://api.derivws.com'
+            DERIV_WS, timeout=timeout, enable_multithread=False
         )
         ws.send(json.dumps(payload))
         deadline = time.time() + timeout
@@ -75,7 +75,7 @@ def deriv_request(payload, timeout=18):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_deriv_symbols():
-    response=deriv_request({'active_symbols':'brief','product_type':'basic'})
+    response=deriv_request({'active_symbols':'brief','req_id':1})
     symbols=response.get('active_symbols')
     if not isinstance(symbols,list) or not symbols: raise RuntimeError('A Deriv não devolveu a lista de símbolos.')
     return symbols
@@ -87,7 +87,7 @@ def find_symbol(asset, symbols):
     wanted=norm(asset)
     candidates=[]
     for item in symbols:
-        names=[item.get('display_name',''),item.get('underlying_symbol',''),item.get('symbol','')]
+        names=[item.get('display_name',''),item.get('underlying_symbol_name',''),item.get('underlying_symbol',''),item.get('symbol','')]
         if any(norm(n)==wanted for n in names if n): candidates.append(item)
     # Forex symbols may be represented with an alias/display name; require exact normalized pair.
     if not candidates and '/' in asset:
@@ -96,11 +96,11 @@ def find_symbol(asset, symbols):
     if len(candidates)!=1:
         raise RuntimeError('Não encontrei uma correspondência única e exacta deste activo na Deriv. Não vou substituir por outro símbolo.')
     item=candidates[0]
-    return item.get('underlying_symbol') or item.get('symbol'), item.get('display_name') or asset
+    return item.get('underlying_symbol') or item.get('symbol'), item.get('underlying_symbol_name') or item.get('display_name') or asset
 
 
 def get_candles(symbol, granularity, count=220):
-    msg=deriv_request({'ticks_history':symbol,'adjust_start_time':1,'count':count,'end':'latest','start':1,'style':'candles','granularity':granularity})
+    msg=deriv_request({'ticks_history':symbol,'adjust_start_time':1,'count':count,'end':'latest','start':1,'style':'candles','granularity':granularity,'req_id':2})
     candles=msg.get('candles')
     if not isinstance(candles,list) or len(candles)<80: raise RuntimeError('Dados históricos insuficientes recebidos da Deriv.')
     df=pd.DataFrame(candles)
