@@ -1,549 +1,213 @@
-import os
-import re
-import json
-import sqlite3
-import base64
+import os, re, json, base64, time
 from io import BytesIO
 from datetime import datetime, timezone
 
 import requests
+import numpy as np
+import pandas as pd
 import streamlit as st
+import websocket
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-APP = "DONCULLER-TRADE47"
-APP_VERSION = "V15.0"
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL_DEFAULT = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-super-vl:free").strip()
-DB_PATH = os.getenv("DONCULLER_DB_PATH", "donculler_history.db")
+APP = 'DONCULLER-TRADE47'
+VERSION = 'V16.0'
+OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+DERIV_WS = os.getenv('DERIV_WS_URL', 'wss://ws.derivws.com/websockets/v3?app_id=1089')
+MODEL_DEFAULT = os.getenv('OPENROUTER_MODEL', 'nvidia/nemotron-3.5-super-vl:free').strip()
+GRANULARITY = {'M1':60,'M2':120,'M3':180,'M5':300,'M10':600,'M15':900,'M30':1800,'H1':3600,'H2':7200,'H4':14400,'D1':86400}
 
-st.set_page_config(page_title=APP, page_icon="🦁", layout="wide")
-st.markdown("""
-<style>
-.stApp {background:#071321;color:#edf4fb;}
-section[data-testid="stSidebar"] {background:#0b1b2d;}
-.hero,.box {background:#0d2033;border:1px solid #24445e;border-radius:14px;padding:18px;}
-.buy {color:#25d887;font-size:30px;font-weight:800;}
-.sell {color:#ff6874;font-size:30px;font-weight:800;}
-.wait {color:#ffc857;font-size:30px;font-weight:800;}
-div.stButton>button {background:#16865f;color:white;font-weight:700;border:0;min-height:46px;}
-.small {color:#9fb3c8;font-size:13px;}
-</style>
-""", unsafe_allow_html=True)
+# Remove a base SQLite legada da V15, caso ainda exista no disco local do serviço.
+_old_db = os.path.join(os.getcwd(), 'donculler_history.db')
+try:
+    if os.path.isfile(_old_db):
+        os.remove(_old_db)
+except OSError:
+    pass
+
+st.set_page_config(page_title=APP, page_icon='🦁', layout='wide')
+st.markdown('''<style>
+.stApp{background:#071321;color:#edf4fb} section[data-testid="stSidebar"]{background:#0b1b2d}
+.hero,.box{background:#0d2033;border:1px solid #24445e;border-radius:14px;padding:18px}
+.buy{color:#25d887;font-size:30px;font-weight:800}.sell{color:#ff6874;font-size:30px;font-weight:800}.wait{color:#ffc857;font-size:30px;font-weight:800}
+.small{color:#9fb3c8;font-size:13px} div.stButton>button{background:#16865f;color:white;font-weight:700;min-height:46px}
+</style>''', unsafe_allow_html=True)
 
 MARKETS = {
-    "Forex": ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "NZD/USD", "USD/CAD", "EUR/GBP", "EUR/JPY", "GBP/JPY", "XAU/USD", "XAG/USD", "Outro par Forex"],
-    "Índices Sintético": [
-        "Volatility 10 Index", "Volatility 10 (1s) Index", "Volatility 25 Index", "Volatility 25 (1s) Index",
-        "Volatility 50 Index", "Volatility 50 (1s) Index", "Volatility 75 Index", "Volatility 75 (1s) Index",
-        "Volatility 100 Index", "Volatility 100 (1s) Index", "Volatility 150 (1s) Index", "Volatility 250 (1s) Index",
-        "Boom 300 Index", "Boom 500 Index", "Boom 600 Index", "Boom 900 Index", "Boom 1000 Index",
-        "Crash 300 Index", "Crash 500 Index", "Crash 600 Index", "Crash 900 Index", "Crash 1000 Index",
-        "Jump 10 Index", "Jump 25 Index", "Jump 50 Index", "Jump 75 Index", "Jump 100 Index",
-        "Step Index", "Multi Step Index", "Range Break 100 Index", "Range Break 200 Index", "Drift Switch Index", "Outro índice sintético"
-    ],
-    "Outro": ["Bitcoin (BTC/USD)", "Ethereum (ETH/USD)", "Outra criptomoeda", "US 500", "US 100", "US 30", "Germany 40", "UK 100", "Ação", "Matéria-prima", "Outro ativo"]
-}
-PLATFORMS = ["MetaTrader 5 (MT5)", "cTrader", "TradingView", "Outra plataforma"]
-TIMEFRAMES = ["M1", "M2", "M3", "M5", "M10", "M15", "M30", "H1", "H2", "H4", "D1", "W1", "MN1"]
+ 'Índices sintéticos': ['Volatility 10 Index','Volatility 10 (1s) Index','Volatility 25 Index','Volatility 25 (1s) Index','Volatility 50 Index','Volatility 50 (1s) Index','Volatility 75 Index','Volatility 75 (1s) Index','Volatility 100 Index','Volatility 100 (1s) Index','Volatility 150 (1s) Index','Volatility 250 (1s) Index','Boom 300 Index','Boom 500 Index','Boom 600 Index','Boom 900 Index','Boom 1000 Index','Crash 300 Index','Crash 500 Index','Crash 600 Index','Crash 900 Index','Crash 1000 Index','Jump 10 Index','Jump 25 Index','Jump 50 Index','Jump 75 Index','Jump 100 Index','Step Index','Multi Step Index','Range Break 100 Index','Range Break 200 Index','Drift Switch Index'],
+ 'Forex / metais': ['EUR/USD','GBP/USD','USD/JPY','USD/CHF','AUD/USD','NZD/USD','USD/CAD','EUR/GBP','EUR/JPY','GBP/JPY','XAU/USD','XAG/USD'],
+ 'Cripto': ['BTC/USD','ETH/USD']}
+PLATFORMS=['MetaTrader 5 (MT5)','cTrader','TradingView','Outra plataforma']
+TIMEFRAMES=list(GRANULARITY)
 
 
-def db_init():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL,
-            market TEXT, asset TEXT, platform TEXT, timeframe TEXT,
-            signal TEXT, confidence REAL, entry TEXT, sl TEXT, tp TEXT,
-            result_status TEXT NOT NULL DEFAULT 'PENDENTE',
-            closed_at TEXT, result_note TEXT
-        )""")
-        # Migração segura: preserva o histórico criado nas versões anteriores.
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(history)")}
-        if "result_status" not in columns:
-            conn.execute("ALTER TABLE history ADD COLUMN result_status TEXT NOT NULL DEFAULT 'PENDENTE'")
-        if "closed_at" not in columns:
-            conn.execute("ALTER TABLE history ADD COLUMN closed_at TEXT")
-        if "result_note" not in columns:
-            conn.execute("ALTER TABLE history ADD COLUMN result_note TEXT")
-        conn.execute("UPDATE history SET result_status='NAO_APLICAVEL' WHERE signal='AGUARDAR'")
-
-
-def save_result(meta, result):
-    status = "PENDENTE" if result["signal"] in ("BUY", "SELL") else "NAO_APLICAVEL"
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""INSERT INTO history
-            (created, market, asset, platform, timeframe, signal, confidence, entry, sl, tp, result_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (datetime.now(timezone.utc).isoformat(), meta["market"], meta["asset"],
-             meta["platform"], meta["timeframe"], result["signal"], result["confidence"],
-             result["entry"], result["sl"], result["tp"], status))
-
-
-def update_trade_status(trade_id, status, note=""):
-    if status not in ("WINNER", "LOSS", "PENDENTE"):
-        raise ValueError("Estado de operação inválido.")
-    closed_at = datetime.now(timezone.utc).isoformat() if status in ("WINNER", "LOSS") else None
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("UPDATE history SET result_status=?, closed_at=?, result_note=? WHERE id=? AND signal IN ('BUY','SELL')",
-                     (status, closed_at, note.strip(), int(trade_id)))
-
-
-def get_trade_stats():
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""SELECT signal,
-            SUM(CASE WHEN result_status='WINNER' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN result_status='LOSS' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN result_status='PENDENTE' THEN 1 ELSE 0 END)
-            FROM history WHERE signal IN ('BUY','SELL') GROUP BY signal""").fetchall()
-    stats = {side: {"wins": 0, "losses": 0, "pending": 0} for side in ("BUY", "SELL")}
-    for side, wins, losses, pending in rows:
-        stats[side] = {"wins": wins or 0, "losses": losses or 0, "pending": pending or 0}
-    return stats
-
-
-def extract_text(content):
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, dict):
-        for key in ("text", "output_text", "content"):
-            if key in content:
-                try:
-                    value = extract_text(content[key])
-                    if value:
-                        return value
-                except ValueError:
-                    continue
-        raise ValueError("A resposta veio num objeto sem texto utilizável.")
-    if isinstance(content, list):
-        chunks = []
-        for item in content:
-            if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
-            elif isinstance(item, dict):
-                for key in ("text", "output_text", "content"):
-                    if key in item:
-                        try:
-                            part = extract_text(item[key])
-                            if part:
-                                chunks.append(part)
-                                break
-                        except ValueError:
-                            continue
-        if chunks:
-            return "\n".join(chunks).strip()
-        raise ValueError("A resposta veio em blocos sem texto utilizável.")
-    if content is None:
-        raise ValueError("A API devolveu content vazio ou null.")
-    raise ValueError(f"Formato de conteúdo não suportado: {type(content).__name__}.")
-
-
-def parse_json(content):
-    text = extract_text(content).lstrip("\ufeff").strip()
-    text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```\s*$", "", text)
+def deriv_request(payload, timeout=18):
+    ws = websocket.create_connection(DERIV_WS, timeout=timeout, enable_multithread=False)
     try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\{", text):
-        try:
-            obj, _ = decoder.raw_decode(text[match.start():])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            continue
-    raise ValueError("A resposta textual não contém um objeto JSON válido.")
+        ws.send(json.dumps(payload))
+        deadline=time.time()+timeout
+        while time.time()<deadline:
+            raw=ws.recv()
+            if not raw: continue
+            msg=json.loads(raw)
+            if msg.get('error'):
+                raise RuntimeError(msg['error'].get('message','Erro na API Deriv'))
+            if msg.get('msg_type'):
+                return msg
+        raise RuntimeError('Tempo esgotado ao consultar a Deriv.')
+    finally:
+        ws.close()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_deriv_symbols():
+    response=deriv_request({'active_symbols':'brief','product_type':'basic'})
+    symbols=response.get('active_symbols')
+    if not isinstance(symbols,list) or not symbols: raise RuntimeError('A Deriv não devolveu a lista de símbolos.')
+    return symbols
 
 
-def _price_number(value):
-    """Extrai um preço único; intervalos e textos ambíguos não são adivinhados."""
-    if not value:
-        return None
-    text = str(value).strip().replace(" ", "")
-    matches = re.findall(r"(?<![A-Za-z])[-+]?(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,]\d+)?", text)
-    if len(matches) != 1:
-        return None
-    token = matches[0]
-    if "," in token and "." in token:
-        token = token.replace(".", "").replace(",", ".") if token.rfind(",") > token.rfind(".") else token.replace(",", "")
-    elif "," in token:
-        token = token.replace(",", ".")
-    try:
-        return float(token)
-    except ValueError:
-        return None
+def norm(s): return re.sub(r'[^a-z0-9]','',str(s).lower().replace('index',''))
+
+def find_symbol(asset, symbols):
+    wanted=norm(asset)
+    candidates=[]
+    for item in symbols:
+        names=[item.get('display_name',''),item.get('underlying_symbol',''),item.get('symbol','')]
+        if any(norm(n)==wanted for n in names if n): candidates.append(item)
+    # Forex symbols may be represented with an alias/display name; require exact normalized pair.
+    if not candidates and '/' in asset:
+        compact=asset.replace('/','').upper()
+        candidates=[x for x in symbols if compact in [str(x.get('symbol','')).upper(),str(x.get('underlying_symbol','')).upper()]]
+    if len(candidates)!=1:
+        raise RuntimeError('Não encontrei uma correspondência única e exacta deste activo na Deriv. Não vou substituir por outro símbolo.')
+    item=candidates[0]
+    return item.get('underlying_symbol') or item.get('symbol'), item.get('display_name') or asset
 
 
-def validate_result(data):
-    if not isinstance(data, dict):
-        raise ValueError("O JSON devolvido não é um objecto.")
-    if "buy_score" not in data or "sell_score" not in data:
-        raise ValueError("O modelo não devolveu as duas pontuações BUY/SELL.")
-    try:
-        buy_score = float(data["buy_score"])
-        sell_score = float(data["sell_score"])
-        confidence = float(data.get("confidence", 0))
-    except (TypeError, ValueError):
-        raise ValueError("Pontuações BUY/SELL ou confiança inválidas.")
-    if not (0 <= buy_score <= 100 and 0 <= sell_score <= 100):
-        raise ValueError("As pontuações BUY/SELL devem estar entre 0 e 100.")
-    if not 0 <= confidence <= 100:
-        raise ValueError("A confiança deve estar entre 0 e 100.")
-    if buy_score == 0 and sell_score == 0:
-        raise ValueError("A análise não produziu pontuações. Verifica o modelo de visão.")
-
-    result = {
-        "signal": "AGUARDAR",
-        "confidence": round(confidence, 1),
-        "buy_score": round(buy_score, 1),
-        "sell_score": round(sell_score, 1),
-        "entry": str(data.get("entry") or "").strip(),
-        "trigger": str(data.get("trigger") or "").strip(),
-        "sl": str(data.get("stop_loss") or data.get("sl") or "").strip(),
-        "tp": str(data.get("take_profit") or data.get("tp") or "").strip(),
-        "invalidation": str(data.get("invalidation") or "").strip(),
-        "setup": str(data.get("setup") or "").strip(),
-        "reason": str(data.get("reason") or "").strip(),
-        "market_state": str(data.get("market_state") or "").strip(),
-        "buy_evidence": str(data.get("buy_evidence") or "").strip(),
-        "sell_evidence": str(data.get("sell_evidence") or "").strip(),
-        "risk_reward": str(data.get("risk_reward") or "").strip()
-    }
-
-    # A decisão é calculada pela aplicação, não aceite cegamente do modelo.
-    # Decisão equilibrada: pontuação mínima moderada + vantagem clara.
-    # Não exige uma pontuação artificialmente alta nem favorece BUY/SELL.
-    minimum_score = 50
-    minimum_advantage = 5
-    difference = buy_score - sell_score
-    if buy_score >= minimum_score and difference >= minimum_advantage:
-        candidate = "BUY"
-    elif sell_score >= minimum_score and difference <= -minimum_advantage:
-        candidate = "SELL"
-    else:
-        candidate = "AGUARDAR"
-
-    # V13: invalidação pode ser descrita no gatilho/SL; não deve bloquear
-    # uma oportunidade se entrada, gatilho, SL e TP estiverem definidos.
-    # Só a evidência do lado escolhido é obrigatória. Exigir texto dos DOIS
-    # lados fazia o modelo falhar mesmo quando o setup vencedor estava completo.
-    chosen_evidence = result["buy_evidence"] if candidate == "BUY" else result["sell_evidence"]
-    complete_plan = all((result["entry"], result["trigger"], result["sl"],
-                         result["tp"], chosen_evidence))
-    entry_n = _price_number(result["entry"])
-    sl_n = _price_number(result["sl"])
-    tp_n = _price_number(result["tp"])
-    levels_valid = False
-    if None not in (entry_n, sl_n, tp_n):
-        if candidate == "BUY":
-            risk, reward = entry_n - sl_n, tp_n - entry_n
-        elif candidate == "SELL":
-            risk, reward = sl_n - entry_n, entry_n - tp_n
-        else:
-            risk = reward = -1
-        levels_valid = risk > 0 and reward > 0 and reward / risk >= 1.3
-
-    if candidate in ("BUY", "SELL") and complete_plan and levels_valid:
-        result["signal"] = candidate
-        # Calcula RR localmente; não depende do texto livre do modelo.
-        result["risk_reward"] = f"1:{(abs(tp_n-entry_n)/abs(entry_n-sl_n) if candidate == 'BUY' else abs(entry_n-tp_n)/abs(sl_n-entry_n)):.2f}"
-    else:
-        result.update(signal="AGUARDAR", entry="", trigger="", sl="",
-                      tp="", invalidation="")
-        if not result["reason"]:
-            result["reason"] = (
-                "A vantagem técnica, as evidências ou a coerência matemática "
-                "dos níveis não passaram na validação."
-            )
-        if candidate in ("BUY", "SELL") and not levels_valid:
-            result["reason"] += " Não foi possível confirmar níveis coerentes e risco/retorno mínimo de 1:1,3."
-    return result
+def get_candles(symbol, granularity, count=220):
+    msg=deriv_request({'ticks_history':symbol,'adjust_start_time':1,'count':count,'end':'latest','start':1,'style':'candles','granularity':granularity})
+    candles=msg.get('candles')
+    if not isinstance(candles,list) or len(candles)<80: raise RuntimeError('Dados históricos insuficientes recebidos da Deriv.')
+    df=pd.DataFrame(candles)
+    for col in ['open','high','low','close']:
+        df[col]=pd.to_numeric(df[col],errors='coerce')
+    df['epoch']=pd.to_numeric(df['epoch'],errors='coerce')
+    df=df.dropna(subset=['open','high','low','close','epoch']).sort_values('epoch').drop_duplicates('epoch').reset_index(drop=True)
+    valid=(df['high']>=df[['open','close','low']].max(axis=1)) & (df['low']<=df[['open','close','high']].min(axis=1))
+    df=df[valid].reset_index(drop=True)
+    if len(df)<80: raise RuntimeError('As velas recebidas não passaram na validação OHLC.')
+    age=time.time()-float(df.epoch.iloc[-1])
+    if age > max(granularity*3, 900): raise RuntimeError(f'Última vela demasiado antiga ({int(age)} segundos). Análise cancelada.')
+    return df, age
 
 
-def make_prompt(meta):
-    return f"""
-És o analista técnico principal do DONCULLER-TRADE47 {APP_VERSION}.
-Analisa APENAS o screenshot recebido. Responde em português simples e operacional.
-Mercado: {meta['market']} | Activo: {meta['asset']}
-Plataforma: {meta['platform']} | Timeframe: {meta['timeframe']}
-
-MÉTODO:
-1. Descreve estado do mercado, tendência, lateralização e estrutura HH/HL ou
-   LH/LL, apenas quando visíveis.
-2. Avalia BUY e SELL separadamente antes de escolher.
-3. Compara estrutura, suporte/resistência, velas, momentum e indicadores visíveis.
-4. Distingue continuação, pullback e reversão. Uma vela isolada não confirma
-   reversão. Identifica se o gatilho ainda é futuro ou já ocorreu.
-5. Nunca favoreças um lado pelo nome do activo.
-
-INDICADORES:
-Considera EMA, RSI, MACD, ATR, Fractals e Zig Zag apenas quando identificáveis.
-Não inventes valores nem afirmes cálculos de indicadores que não estão visíveis.
-
-PONTUAÇÃO:
-buy_score e sell_score separados, 0–100. Mede força relativa da evidência
-visual, NÃO probabilidade de vitória. Não uses 0/0 nem pontuações extremas
-sem justificação. Pontua estrutura (0–35), zona/swing (0–25),
-velas/momentum (0–25) e indicadores realmente visíveis (0–15).
-Compara os dois cenários: se um lado tiver vantagem técnica real, assume-o;
-não uses AGUARDAR como resposta padrão. AGUARDAR é para conflito, falta de
-estrutura ou falta de níveis legíveis, não para evitar tomar uma decisão.
-
-VALIDAÇÃO:
-- BUY: SL abaixo da entrada e TP acima da entrada.
-- SELL: SL acima da entrada e TP abaixo da entrada.
-- Risco/retorno mínimo 1:1,3.
-- Usa três preços numéricos únicos e legíveis. Não inventes valores.
-- Se os preços não forem legíveis, deixa entry, stop_loss e take_profit vazios.
-- A entrada deve ser futura e condicional; indica o gatilho objectivo.
-- Se BUY ou SELL tiver evidência superior e coerente, escolhe esse lado.
-- AGUARDAR apenas quando os dois lados estiverem equilibrados/contraditórios,
-  o mercado estiver sem estrutura ou não houver níveis legíveis.
-- Não exijas confirmação perfeita: uma estrutura + gatilho objetivo + risco
-  controlado podem formar setup válido; descreve o que ainda falta activar.
-- Não prometas taxa de acerto.
-
-Responde APENAS com JSON válido:
-{{
- "confidence": 0,
- "buy_score": 0,
- "sell_score": 0,
- "market_state": "estado e estrutura visível",
- "setup": "continuação, pullback, reversão ou indefinido",
- "buy_evidence": "factores a favor de BUY",
- "sell_evidence": "factores a favor de SELL",
- "trigger": "condição objectiva de activação",
- "entry": "um único preço numérico",
- "stop_loss": "um único preço numérico",
- "take_profit": "um único preço numérico",
- "risk_reward": "relação calculada",
- "invalidation": "condição que cancela o cenário",
- "reason": "conclusão comparando os dois lados"
-}}
-""" .strip()
+def indicators(df):
+    d=df.copy(); c=d.close; h=d.high; l=d.low
+    d['ema20']=c.ewm(span=20,adjust=False).mean(); d['ema50']=c.ewm(span=50,adjust=False).mean()
+    delta=c.diff(); gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False).mean(); loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False).mean()
+    rs=gain/loss.replace(0,np.nan); d['rsi']=100-(100/(1+rs)); d['rsi']=d.rsi.fillna(50)
+    ema12=c.ewm(span=12,adjust=False).mean(); ema26=c.ewm(span=26,adjust=False).mean(); d['macd']=ema12-ema26; d['macd_signal']=d.macd.ewm(span=9,adjust=False).mean()
+    prev=c.shift(1); tr=pd.concat([(h-l),(h-prev).abs(),(l-prev).abs()],axis=1).max(axis=1); d['atr']=tr.ewm(alpha=1/14,adjust=False).mean()
+    d['fractal_high']=False; d['fractal_low']=False
+    for i in range(2,len(d)-2):
+        d.loc[i,'fractal_high']=h.iloc[i]>max(h.iloc[i-2],h.iloc[i-1],h.iloc[i+1],h.iloc[i+2])
+        d.loc[i,'fractal_low']=l.iloc[i]<min(l.iloc[i-2],l.iloc[i-1],l.iloc[i+1],l.iloc[i+2])
+    return d
 
 
-
-def call_openrouter(image, meta, api_key, model):
-    image = ImageOps.exif_transpose(image).convert("RGB")
-    image.thumbnail((1600, 1600))
-    buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=85, optimize=True)
-    image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
-
-    payload = {
-        "model": model, "temperature": 0.1, "max_tokens": 1600,
-        "reasoning": {"effort": "none", "exclude": True},
-        "response_format": {"type": "json_object"},
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": make_prompt(meta)},
-                {"type": "image_url", "image_url": {
-                    "url": "data:image/jpeg;base64," + image_b64
-                }}
-            ]
-        }]
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
-        "HTTP-Referer": "https://doncullertrade47.onrender.com", "X-Title": APP
-    }
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=(20, 150))
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Falha de ligação ao OpenRouter: {exc}") from exc
-
-    if response.status_code == 429:
-        raise RuntimeError("Limite OpenRouter atingido (HTTP 429). Aguarda a reposição da quota.")
-    if response.status_code in (401, 403):
-        raise RuntimeError("Chave OpenRouter recusada. Confirma OPENROUTER_API_KEY no Render.")
-    if response.status_code >= 400:
-        raise RuntimeError(f"Erro OpenRouter {response.status_code}: {response.text[:900]}")
-    try:
-        body = response.json()
-    except ValueError as exc:
-        raise RuntimeError(f"OpenRouter não devolveu JSON: {response.text[:400]}") from exc
-    if not isinstance(body, dict):
-        raise RuntimeError("Resposta da API em formato inesperado.")
-    if body.get("error"):
-        raise RuntimeError(f"Erro comunicado pelo modelo: {str(body['error'])[:600]}")
-    choices = body.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError(f"OpenRouter não devolveu choices: {str(body)[:600]}")
-    first = choices[0] if isinstance(choices[0], dict) else {}
-    message = first.get("message") or {}
-    if not isinstance(message, dict):
-        raise RuntimeError("Mensagem do modelo em formato inesperado.")
-    if message.get("refusal"):
-        raise RuntimeError(f"O modelo recusou a análise: {str(message['refusal'])[:400]}")
-    content = message.get("content")
-    finish = first.get("finish_reason", "desconhecido")
-    if content is None or content == "":
-        if message.get("reasoning") or message.get("reasoning_details"):
-            raise RuntimeError("O modelo devolveu raciocínio, mas não a resposta final. Verifica a compatibilidade do modelo de visão em OPENROUTER_MODEL.")
-        raise RuntimeError(f"O modelo devolveu conteúdo vazio (finish_reason: {finish}).")
-    try:
-        return validate_result(parse_json(content))
-    except ValueError as exc:
-        preview = str(content)[:300].replace("\n", " ")
-        raise RuntimeError(f"Resposta inválida/incompleta: {exc} (finish_reason: {finish}; início: {preview})") from exc
+def technical_decision(d):
+    last=d.iloc[-1]; prev=d.iloc[-2]; close=float(last.close); atr=float(last.atr)
+    if not np.isfinite(atr) or atr<=0: raise RuntimeError('ATR inválido; não é possível calcular níveis de risco.')
+    buy=0; sell=0; why_buy=[]; why_sell=[]
+    if last.ema20>last.ema50 and close>last.ema20: buy+=2; why_buy.append('preço acima das EMA20/50 com alinhamento positivo' if last.ema20>last.ema50 else 'preço acima da EMA20')
+    elif last.ema20<last.ema50 and close<last.ema20: sell+=2; why_sell.append('preço abaixo das EMA20/50 com alinhamento negativo')
+    if last.macd>last.macd_signal: buy+=1; why_buy.append('MACD acima da linha de sinal')
+    elif last.macd<last.macd_signal: sell+=1; why_sell.append('MACD abaixo da linha de sinal')
+    if 50<last.rsi<68: buy+=1; why_buy.append(f'RSI {last.rsi:.1f}, momentum comprador sem sobrecompra extrema')
+    elif 32<last.rsi<50: sell+=1; why_sell.append(f'RSI {last.rsi:.1f}, momentum vendedor sem sobrevenda extrema')
+    if close>prev.close and last.close>last.open: buy+=1; why_buy.append('última vela fechou positiva')
+    elif close<prev.close and last.close<last.open: sell+=1; why_sell.append('última vela fechou negativa')
+    if buy>=3 and buy-sell>=2: side='BUY'
+    elif sell>=3 and sell-buy>=2: side='SELL'
+    else: side='AGUARDAR'
+    # Levels anchored to actual latest Deriv close; no arbitrary model prices.
+    if side=='BUY': entry=close; sl=close-1.2*atr; tp=close+1.8*atr
+    elif side=='SELL': entry=close; sl=close+1.2*atr; tp=close-1.8*atr
+    else: entry=sl=tp=None
+    return {'signal':side,'buy_score':buy,'sell_score':sell,'close':close,'rsi':float(last.rsi),'ema20':float(last.ema20),'ema50':float(last.ema50),'macd':float(last.macd),'macd_signal':float(last.macd_signal),'atr':atr,'entry':entry,'sl':sl,'tp':tp,'rr':1.5 if side!='AGUARDAR' else None,'buy_evidence':why_buy,'sell_evidence':why_sell,'last_epoch':int(last.epoch)}
 
 
-def show_result(result):
-    signal = result["signal"]
-    css = {"BUY": "buy", "SELL": "sell", "AGUARDAR": "wait"}[signal]
-    st.markdown(
-        f'<div class="box"><div class="{css}">{signal} — {result["confidence"]:.1f}%</div></div>',
-        unsafe_allow_html=True
-    )
-    st.caption(f"Força BUY: {result['buy_score']:.0f}/100 | Força SELL: {result['sell_score']:.0f}/100")
-    if result["reason"]:
-        st.write(result["reason"])
-    if signal in ("BUY", "SELL"):
-        st.markdown(f"**Estado do mercado:** {result['market_state'] or 'Não especificado'}")
-        st.markdown(f"**Configuração:** {result['setup'] or 'Não especificada'}")
-        st.markdown(f"**Evidência BUY:** {result['buy_evidence'] or 'Não especificada'}")
-        st.markdown(f"**Evidência SELL:** {result['sell_evidence'] or 'Não especificada'}")
-        st.markdown(f"**Risco/retorno:** {result['risk_reward'] or 'Não especificado'}")
-        st.markdown(f"**Gatilho de activação:** {result['trigger']}")
-        st.markdown(f"**Entrada futura:** {result['entry']}")
-        st.markdown(f"**Stop Loss:** {result['sl']}")
-        st.markdown(f"**Take Profit:** {result['tp']}")
-        st.markdown(f"**Invalidação:** {result['invalidation']}")
+def image_comment(image, meta, tech, api_key, model):
+    if not api_key: return 'Comentário visual não disponível: OPENROUTER_API_KEY não configurada.'
+    im=ImageOps.exif_transpose(image).convert('RGB'); im.thumbnail((1400,1400)); b=BytesIO(); im.save(b,'JPEG',quality=82)
+    prompt=(f"Analisa visualmente este screenshot em português. Plataforma {meta['platform']}; ativo selecionado {meta['asset']}; timeframe {meta['timeframe']}. "
+    f"Dados OHLC independentes da Deriv: {meta['deriv_name']}, fecho {tech['close']}, RSI {tech['rsi']:.1f}, EMA20 {tech['ema20']}, EMA50 {tech['ema50']}. "
+    "Comenta apenas o que é legível na imagem. Não determines nem alteres BUY/SELL, não inventes preços, não declares que o símbolo coincide se não estiver visível. Até 4 frases.")
+    payload={'model':model,'temperature':0.1,'max_tokens':350,'messages':[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(b.getvalue()).decode()}}]}]}
+    r=requests.post(OPENROUTER_URL,headers={'Authorization':'Bearer '+api_key,'Content-Type':'application/json','HTTP-Referer':'https://doncullertrade47.onrender.com','X-Title':APP},json=payload,timeout=(20,90))
+    if r.status_code>=400: return f'Comentário visual indisponível (OpenRouter HTTP {r.status_code}).'
+    try: return str(r.json()['choices'][0]['message']['content']).strip()
+    except Exception: return 'O modelo não devolveu comentário visual utilizável.'
 
 
-db_init()
-st.markdown(
-    f'<div class="hero"><div class="small">V15.0 · DECISÃO EQUILIBRADA + VALIDAÇÃO DE RISCO</div>'
-    f'<h1>🦁 {APP}</h1><span class="small">Análise comparativa de gráficos por imagem · níveis validados</span></div>',
-    unsafe_allow_html=True
-)
+def fmt(v): return '—' if v is None else f'{v:.5f}'.rstrip('0').rstrip('.')
 
+st.markdown(f'<div class="hero"><div class="small">{VERSION} · DADOS OHLC DERIV + VALIDAÇÃO LOCAL</div><h1>🦁 {APP}</h1><span class="small">Dados de mercado primeiro. Screenshot como confirmação visual.</span></div>',unsafe_allow_html=True)
 with st.sidebar:
-    st.subheader("Configuração")
-    market = st.selectbox("Mercado", list(MARKETS.keys()))
-    asset = st.selectbox("Instrumento", MARKETS[market])
-    platform = st.selectbox("Plataforma", PLATFORMS)
-    timeframe = st.selectbox("Timeframe", TIMEFRAMES, index=3)
-    model = st.text_input("Modelo OpenRouter", MODEL_DEFAULT)
-    st.caption("A chave é lida de OPENROUTER_API_KEY nas variáveis de ambiente do Render.")
+    st.subheader('Configuração')
+    market=st.selectbox('Mercado',list(MARKETS))
+    asset=st.selectbox('Activo',MARKETS[market])
+    platform=st.selectbox('Plataforma do gráfico',PLATFORMS)
+    timeframe=st.selectbox('Timeframe',TIMEFRAMES,index=3)
+    model=st.text_input('Modelo OpenRouter',MODEL_DEFAULT)
+    st.caption('OPENROUTER_API_KEY é configurada nas Environment Variables do Render.')
 
-left, right = st.columns([1.1, 0.9], gap="large")
+left,right=st.columns([1.05,.95],gap='large')
 with left:
-    st.subheader("Screenshot do gráfico")
-    uploaded = st.file_uploader("Carrega uma imagem", type=["png", "jpg", "jpeg", "webp"], key="chart_upload")
-    preview = None
-    if uploaded is not None:
+    st.subheader('Screenshot')
+    upload=st.file_uploader('Carrega o gráfico',type=['png','jpg','jpeg','webp'],key='v16_image')
+    image_obj=None
+    if upload:
         try:
-            preview = Image.open(uploaded)
-            preview.load()
-            st.image(preview, caption="Gráfico carregado", use_container_width=True)
-        except (UnidentifiedImageError, OSError):
-            st.error("Não foi possível abrir esta imagem. Envia novamente em PNG ou JPG.")
-    analyze_button = st.button("🦁 ANALISAR GRÁFICO", use_container_width=True)
-
+            image_obj=Image.open(upload); image_obj.load(); st.image(image_obj,caption='Imagem recebida',use_container_width=True)
+        except (UnidentifiedImageError,OSError): st.error('Imagem inválida. Envia PNG ou JPG.')
+    st.info('Confirma que o símbolo e o timeframe seleccionados correspondem exactamente ao gráfico. A Deriv será a fonte OHLC; a imagem não substitui essa confirmação.')
+    run=st.button('🦁 ANALISAR COM DADOS DERIV',use_container_width=True)
 with right:
-    st.subheader("Resultado")
-    if analyze_button:
-        api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-        if preview is None:
-            st.warning("Carrega primeiro um screenshot válido.")
-        elif not api_key:
-            st.error("Falta OPENROUTER_API_KEY nas Environment Variables do Render.")
-        elif not model.strip():
-            st.error("Indica um modelo OpenRouter.")
+    st.subheader('Resultado V16')
+    if run:
+        if not image_obj: st.warning('Carrega primeiro um screenshot válido.')
+        elif timeframe not in GRANULARITY: st.error('Timeframe não suportado pela fonte Deriv.')
         else:
-            meta = {"market": market, "asset": asset, "platform": platform, "timeframe": timeframe}
-            with st.spinner("A analisar o gráfico..."):
-                try:
-                    result = call_openrouter(preview, meta, api_key, model.strip())
-                    save_result(meta, result)
-                    st.session_state["v12_result"] = result
-                    st.session_state["v12_meta"] = meta
-                except Exception as exc:
-                    st.session_state.pop("v12_result", None)
-                    st.error(str(exc))
-    current_result = st.session_state.get("v12_result")
-    if current_result:
-        show_result(current_result)
-    else:
-        st.caption("O resultado aparecerá aqui após a análise.")
+            try:
+                with st.spinner('A confirmar símbolo e a obter velas reais da Deriv...'):
+                    symbols=get_deriv_symbols(); symbol,deriv_name=find_symbol(asset,symbols)
+                    candles,age=get_candles(symbol,GRANULARITY[timeframe]); data=indicators(candles); tech=technical_decision(data)
+                    meta={'market':market,'asset':asset,'platform':platform,'timeframe':timeframe,'deriv_name':deriv_name}
+                    comment=image_comment(image_obj,meta,tech,os.getenv('OPENROUTER_API_KEY','').strip(),model.strip())
+                    st.session_state['v16_result']={'tech':tech,'comment':comment,'meta':meta,'age':age,'symbol':symbol}
+            except Exception as e:
+                st.session_state.pop('v16_result',None); st.error(str(e))
+    result=st.session_state.get('v16_result')
+    if result:
+        t=result['tech']; sig=t['signal']; cls={'BUY':'buy','SELL':'sell','AGUARDAR':'wait'}[sig]
+        st.markdown(f'<div class="box"><div class="{cls}">{sig}</div><b>{result["meta"]["asset"]} · {result["meta"]["timeframe"]}</b><br><span class="small">Fonte: Deriv · {result["symbol"]}</span></div>',unsafe_allow_html=True)
+        st.caption(f'Força técnica calculada: BUY {t["buy_score"]}/4 · SELL {t["sell_score"]}/4 — não é probabilidade de vitória.')
+        st.write(f'**Preço de fecho da última vela:** {fmt(t["close"])}')
+        st.write(f'**RSI:** {t["rsi"]:.1f} | **EMA20:** {fmt(t["ema20"])} | **EMA50:** {fmt(t["ema50"])}')
+        st.write(f'**MACD:** {fmt(t["macd"])} | **Sinal MACD:** {fmt(t["macd_signal"])} | **ATR:** {fmt(t["atr"])}')
+        st.write('**Evidências BUY:** '+('; '.join(t['buy_evidence']) or 'Sem confirmação suficiente.'))
+        st.write('**Evidências SELL:** '+('; '.join(t['sell_evidence']) or 'Sem confirmação suficiente.'))
+        if sig!='AGUARDAR':
+            st.success(f'Entrada de referência: {fmt(t["entry"])}')
+            st.write(f'**Stop Loss:** {fmt(t["sl"])}')
+            st.write(f'**Take Profit:** {fmt(t["tp"])}')
+            st.write('**Risco/retorno planeado:** 1:1,50')
+            st.warning('A entrada é uma referência calculada no fecho da última vela. Espera por nova confirmação/activação; não é ordem automática.')
+        else: st.info('Os indicadores não apresentam vantagem mínima e concordante. Não há entrada validada neste momento.')
+        st.markdown('**Verificação visual do screenshot**')
+        st.write(result['comment'])
+        st.caption(f'Última vela: {datetime.fromtimestamp(t["last_epoch"],timezone.utc).strftime("%Y-%m-%d %H:%M UTC")} · idade aproximada: {int(result["age"])} s.')
+    else: st.caption('O relatório aparecerá aqui depois da análise.')
 
 st.divider()
-st.subheader("📊 Desempenho real — WINNERS e LOSSES")
-st.caption("Regista manualmente o resultado de cada sinal depois de a operação terminar. A aplicação não acompanha cotações nem confirma resultados automaticamente.")
-stats = get_trade_stats()
-all_wins = sum(stats[x]["wins"] for x in ("BUY", "SELL"))
-all_losses = sum(stats[x]["losses"] for x in ("BUY", "SELL"))
-all_closed = all_wins + all_losses
-
-def show_side_stats(side):
-    data = stats[side]
-    closed = data["wins"] + data["losses"]
-    rate = (data["wins"] / closed * 100) if closed else 0.0
-    st.metric(f"{side} — taxa de acerto", f"{rate:.1f}%" if closed else "Sem dados", help="WINNERS ÷ (WINNERS + LOSSES). Sinais pendentes não entram no cálculo.")
-    st.caption(f"WINNERS: {data['wins']} · LOSSES: {data['losses']} · Pendentes: {data['pending']}")
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    show_side_stats("BUY")
-with c2:
-    show_side_stats("SELL")
-with c3:
-    overall_rate = (all_wins / all_closed * 100) if all_closed else 0.0
-    st.metric("Geral — taxa de acerto", f"{overall_rate:.1f}%" if all_closed else "Sem dados")
-    st.caption(f"WINNERS: {all_wins} · LOSSES: {all_losses} · Fechadas: {all_closed}")
-
-st.subheader("Registar resultado de um sinal")
-with sqlite3.connect(DB_PATH) as conn:
-    pending_rows = conn.execute("""SELECT id, created, signal, asset, timeframe, entry, sl, tp
-        FROM history WHERE signal IN ('BUY','SELL') AND result_status='PENDENTE' ORDER BY id DESC""").fetchall()
-if pending_rows:
-    options = {
-        f"#{r[0]} · {r[2]} · {r[3]} · {r[4]} · {r[1][:16].replace('T',' ')}": r
-        for r in pending_rows
-    }
-    with st.form("trade_result_form"):
-        chosen_label = st.selectbox("Sinal concluído", list(options.keys()))
-        chosen_status = st.radio("Resultado", ["WINNER", "LOSS"], horizontal=True)
-        result_note = st.text_input("Nota opcional (ex.: TP atingido / SL atingido)")
-        submitted = st.form_submit_button("Guardar resultado", use_container_width=True)
-        if submitted:
-            update_trade_status(options[chosen_label][0], chosen_status, result_note)
-            st.success(f"Resultado do sinal #{options[chosen_label][0]} guardado: {chosen_status}.")
-            st.rerun()
-else:
-    st.info("Não há sinais BUY/SELL pendentes para classificar.")
-
-st.subheader("Histórico de análises e resultados")
-with sqlite3.connect(DB_PATH) as conn:
-    rows = conn.execute(
-        "SELECT id, created, market, asset, platform, timeframe, signal, confidence, result_status, entry, sl, tp "
-        "FROM history ORDER BY id DESC LIMIT 100"
-    ).fetchall()
-if rows:
-    history_data = [{
-        "ID": r[0], "Data UTC": r[1][:19].replace("T", " "), "Mercado": r[2],
-        "Ativo": r[3], "Plataforma": r[4], "Timeframe": r[5],
-        "Sinal": r[6], "Força/Confiança": f"{r[7]:.1f}", "Resultado": r[8],
-        "Entrada": r[9], "SL": r[10], "TP": r[11]
-    } for r in rows]
-    st.dataframe(history_data, use_container_width=True, hide_index=True)
-    import csv
-    from io import StringIO
-    csv_buffer = StringIO()
-    writer = csv.DictWriter(csv_buffer, fieldnames=list(history_data[0].keys()))
-    writer.writeheader()
-    writer.writerows(history_data)
-    st.download_button("Descarregar histórico CSV", csv_buffer.getvalue().encode("utf-8-sig"), "donculler_trade47_historico.csv", "text/csv")
-else:
-    st.caption("Ainda não existem análises guardadas.")
-
-st.markdown(
-    '<div class="small">A confiança e as pontuações são estimativas baseadas na imagem, '
-    'não taxas de acerto comprovadas. As taxas WINNER/LOSS são calculadas a partir dos resultados que regista manualmente. A aplicação não recebe cotações em tempo real nem executa ordens. Testa em Demo antes de considerar dinheiro real.</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="small">V16 não guarda histórico de sinais nem resultados. A análise técnica é calculada localmente a partir de velas públicas da Deriv. O screenshot é comentário complementar. A correspondência do símbolo no gráfico externo deve ser confirmada pelo utilizador. Não há execução automática de ordens nem taxa de acerto garantida. Testa primeiro em conta Demo.</div>',unsafe_allow_html=True)
