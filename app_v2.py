@@ -1,229 +1,223 @@
-import os, re, json, base64, time
+import os, json, time, re, base64
 from io import BytesIO
 from datetime import datetime, timezone
-
-import requests
-import numpy as np
-import pandas as pd
-import streamlit as st
-import websocket
+import requests, numpy as np, pandas as pd, streamlit as st, websocket
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-APP = 'DONCULLER-TRADE47'
-VERSION = 'V16.0'
-OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-DERIV_WS = os.getenv('DERIV_WS_URL', 'wss://api.derivws.com/trading/v1/options/ws/public')
-MODEL_DEFAULT = os.getenv('OPENROUTER_MODEL', 'nvidia/nemotron-3.5-super-vl:free').strip()
-GRANULARITY = {'M1':60,'M2':120,'M3':180,'M5':300,'M10':600,'M15':900,'M30':1800,'H1':3600,'H2':7200,'H4':14400,'D1':86400}
+APP="DONCULLER-TRADE47"; VERSION="V17.0"
+WS=os.getenv("DERIV_WS_URL","wss://api.derivws.com/trading/v1/options/ws/public")
+OR_URL="https://openrouter.ai/api/v1/chat/completions"
+MODEL=os.getenv("OPENROUTER_MODEL","nvidia/nemotron-3.5-super-vl:free").strip()
+TF={"M1":60,"M5":300,"M15":900,"M30":1800,"H1":3600,"H4":14400,"D1":86400}
+MIN_RR=1.5
 
-# Remove a base SQLite legada da V15, caso ainda exista no disco local do serviço.
-_old_db = os.path.join(os.getcwd(), 'donculler_history.db')
-try:
-    if os.path.isfile(_old_db):
-        os.remove(_old_db)
-except OSError:
-    pass
-
-st.set_page_config(page_title=APP, page_icon='🦁', layout='wide')
-st.markdown('''<style>
+st.set_page_config(page_title=APP,page_icon="🦁",layout="wide")
+st.markdown("""<style>
 .stApp{background:#071321;color:#edf4fb} section[data-testid="stSidebar"]{background:#0b1b2d}
 .hero,.box{background:#0d2033;border:1px solid #24445e;border-radius:14px;padding:18px}
-.buy{color:#25d887;font-size:30px;font-weight:800}.sell{color:#ff6874;font-size:30px;font-weight:800}.wait{color:#ffc857;font-size:30px;font-weight:800}
-.small{color:#9fb3c8;font-size:13px} div.stButton>button{background:#16865f;color:white;font-weight:700;min-height:46px}
-</style>''', unsafe_allow_html=True)
+.buy{color:#25d887;font-size:30px;font-weight:800}.sell{color:#ff6874;font-size:30px;font-weight:800}
+.wait{color:#ffc857;font-size:30px;font-weight:800}.small{color:#9fb3c8;font-size:13px}
+div.stButton>button{background:#16865f;color:white;font-weight:700;min-height:46px}
+</style>""",unsafe_allow_html=True)
 
-MARKETS = {
- 'Índices sintéticos': ['Volatility 10 Index','Volatility 10 (1s) Index','Volatility 25 Index','Volatility 25 (1s) Index','Volatility 50 Index','Volatility 50 (1s) Index','Volatility 75 Index','Volatility 75 (1s) Index','Volatility 100 Index','Volatility 100 (1s) Index','Volatility 150 (1s) Index','Volatility 250 (1s) Index','Boom 300 Index','Boom 500 Index','Boom 600 Index','Boom 900 Index','Boom 1000 Index','Crash 300 Index','Crash 500 Index','Crash 600 Index','Crash 900 Index','Crash 1000 Index','Jump 10 Index','Jump 25 Index','Jump 50 Index','Jump 75 Index','Jump 100 Index','Step Index','Multi Step Index','Range Break 100 Index','Range Break 200 Index','Drift Switch Index'],
- 'Forex / metais': ['EUR/USD','GBP/USD','USD/JPY','USD/CHF','AUD/USD','NZD/USD','USD/CAD','EUR/GBP','EUR/JPY','GBP/JPY','XAU/USD','XAG/USD'],
- 'Cripto': ['BTC/USD','ETH/USD']}
-PLATFORMS=['MetaTrader 5 (MT5)','cTrader','TradingView','Outra plataforma']
-TIMEFRAMES=list(GRANULARITY)
-
-
-def deriv_request(payload, timeout=18):
-    ws = None
+def deriv(payload,timeout=20):
+    ws=None
     try:
-        # Endpoint público oficial actual: apenas dados de mercado, sem login.
-        # Não forçar um cabeçalho Origin artificial: a API pública não o exige.
-        ws = websocket.create_connection(
-            DERIV_WS, timeout=timeout, enable_multithread=False
-        )
-        ws.send(json.dumps(payload))
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            raw = ws.recv()
-            if not raw:
-                continue
-            msg = json.loads(raw)
-            if msg.get('error'):
-                err = msg['error']
-                raise RuntimeError(err.get('message', 'Erro na API pública da Deriv'))
-            if msg.get('msg_type'):
-                return msg
-        raise RuntimeError('A Deriv não respondeu dentro do tempo limite.')
-    except websocket.WebSocketBadStatusException as exc:
-        status = getattr(exc, 'status_code', None)
-        raise RuntimeError(f'A Deriv recusou a ligação pública (HTTP {status or "desconhecido"}). Verifica a disponibilidade da API e tenta novamente.') from exc
-    except (websocket.WebSocketException, OSError) as exc:
-        raise RuntimeError(f'Não foi possível estabelecer ligação à Deriv: {exc}.') from exc
+        ws=websocket.create_connection(WS,timeout=timeout,enable_multithread=False)
+        ws.send(json.dumps(payload)); end=time.time()+timeout
+        while time.time()<end:
+            msg=json.loads(ws.recv())
+            if msg.get("error"): raise RuntimeError(msg["error"].get("message","Erro Deriv"))
+            if msg.get("msg_type"): return msg
+        raise RuntimeError("Tempo limite da Deriv.")
+    except websocket.WebSocketBadStatusException as e:
+        raise RuntimeError(f"Deriv recusou a ligação (HTTP {getattr(e,'status_code','?')}).") from e
+    except (websocket.WebSocketException,OSError) as e:
+        raise RuntimeError(f"Falha de ligação Deriv: {e}") from e
     finally:
-        if ws is not None:
-            try:
-                ws.close()
-            except Exception:
-                pass
+        if ws:
+            try: ws.close()
+            except Exception: pass
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_deriv_symbols():
-    response=deriv_request({'active_symbols':'brief','req_id':1})
-    symbols=response.get('active_symbols')
-    if not isinstance(symbols,list) or not symbols: raise RuntimeError('A Deriv não devolveu a lista de símbolos.')
-    return symbols
+@st.cache_data(ttl=900,show_spinner=False)
+def symbols():
+    x=deriv({"active_symbols":"brief","req_id":11}).get("active_symbols")
+    if not isinstance(x,list) or not x: raise RuntimeError("A Deriv não devolveu instrumentos.")
+    return x
 
+def txt(x): return re.sub(r"\\s+"," ",str(x or "")).strip()
+def category(x):
+    z=" ".join(txt(x.get(k)) for k in ("market_display_name","market","submarket_display_name","submarket","display_name")).lower()
+    if "forex" in z: return "Forex"
+    if any(k in z for k in ("synthetic","derived","continuous")): return "Índices sintéticos"
+    if any(k in z for k in ("crypto","cryptocurrency")): return "Cripto"
+    if any(k in z for k in ("commodity","metal")): return "Commodities e metais"
+    if any(k in z for k in ("stock","indices","index","equities")): return "Índices e acções"
+    return "Outros"
+def label(x):
+    return f"{txt(x.get('display_name') or x.get('underlying_symbol_name') or x.get('symbol'))} · {txt(x.get('underlying_symbol') or x.get('symbol'))}"
 
-def norm(s): return re.sub(r'[^a-z0-9]','',str(s).lower().replace('index',''))
+def candles(symbol,gran,count=300):
+    msg=deriv({"ticks_history":symbol,"adjust_start_time":1,"count":count,"end":"latest","start":1,"style":"candles","granularity":gran,"req_id":12})
+    rows=msg.get("candles")
+    if not isinstance(rows,list) or len(rows)<100: raise RuntimeError("Velas insuficientes.")
+    d=pd.DataFrame(rows)
+    for c in ("open","high","low","close","epoch"): d[c]=pd.to_numeric(d[c],errors="coerce")
+    d=d.dropna().sort_values("epoch").drop_duplicates("epoch").reset_index(drop=True)
+    ok=(d.high>=d[["open","close","low"]].max(axis=1))&(d.low<=d[["open","close","high"]].min(axis=1))&(d.high>=d.low)
+    d=d[ok].reset_index(drop=True)
+    if len(d)<100: raise RuntimeError("Velas OHLC inválidas.")
+    d=d.iloc[:-1].copy().reset_index(drop=True) # última vela pode estar aberta
+    age=time.time()-float(d.epoch.iloc[-1])
+    if age>max(gran*2.5,900): raise RuntimeError("Dados demasiado antigos; análise cancelada.")
+    return d,age
 
-def find_symbol(asset, symbols):
-    wanted=norm(asset)
-    candidates=[]
-    for item in symbols:
-        names=[item.get('display_name',''),item.get('underlying_symbol_name',''),item.get('underlying_symbol',''),item.get('symbol','')]
-        if any(norm(n)==wanted for n in names if n): candidates.append(item)
-    # Forex symbols may be represented with an alias/display name; require exact normalized pair.
-    if not candidates and '/' in asset:
-        compact=asset.replace('/','').upper()
-        candidates=[x for x in symbols if compact in [str(x.get('symbol','')).upper(),str(x.get('underlying_symbol','')).upper()]]
-    if len(candidates)!=1:
-        raise RuntimeError('Não encontrei uma correspondência única e exacta deste activo na Deriv. Não vou substituir por outro símbolo.')
-    item=candidates[0]
-    return item.get('underlying_symbol') or item.get('symbol'), item.get('underlying_symbol_name') or item.get('display_name') or asset
-
-
-def get_candles(symbol, granularity, count=220):
-    msg=deriv_request({'ticks_history':symbol,'adjust_start_time':1,'count':count,'end':'latest','start':1,'style':'candles','granularity':granularity,'req_id':2})
-    candles=msg.get('candles')
-    if not isinstance(candles,list) or len(candles)<80: raise RuntimeError('Dados históricos insuficientes recebidos da Deriv.')
-    df=pd.DataFrame(candles)
-    for col in ['open','high','low','close']:
-        df[col]=pd.to_numeric(df[col],errors='coerce')
-    df['epoch']=pd.to_numeric(df['epoch'],errors='coerce')
-    df=df.dropna(subset=['open','high','low','close','epoch']).sort_values('epoch').drop_duplicates('epoch').reset_index(drop=True)
-    valid=(df['high']>=df[['open','close','low']].max(axis=1)) & (df['low']<=df[['open','close','high']].min(axis=1))
-    df=df[valid].reset_index(drop=True)
-    if len(df)<80: raise RuntimeError('As velas recebidas não passaram na validação OHLC.')
-    age=time.time()-float(df.epoch.iloc[-1])
-    if age > max(granularity*3, 900): raise RuntimeError(f'Última vela demasiado antiga ({int(age)} segundos). Análise cancelada.')
-    return df, age
-
-
-def indicators(df):
-    d=df.copy(); c=d.close; h=d.high; l=d.low
-    d['ema20']=c.ewm(span=20,adjust=False).mean(); d['ema50']=c.ewm(span=50,adjust=False).mean()
-    delta=c.diff(); gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False).mean(); loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False).mean()
-    rs=gain/loss.replace(0,np.nan); d['rsi']=100-(100/(1+rs)); d['rsi']=d.rsi.fillna(50)
-    ema12=c.ewm(span=12,adjust=False).mean(); ema26=c.ewm(span=26,adjust=False).mean(); d['macd']=ema12-ema26; d['macd_signal']=d.macd.ewm(span=9,adjust=False).mean()
-    prev=c.shift(1); tr=pd.concat([(h-l),(h-prev).abs(),(l-prev).abs()],axis=1).max(axis=1); d['atr']=tr.ewm(alpha=1/14,adjust=False).mean()
-    d['fractal_high']=False; d['fractal_low']=False
+def indicators(d):
+    d=d.copy(); c,h,l=d.close,d.high,d.low
+    d["ema20"]=c.ewm(span=20,adjust=False).mean(); d["ema50"]=c.ewm(span=50,adjust=False).mean()
+    delta=c.diff(); g=delta.clip(lower=0).ewm(alpha=1/14,adjust=False).mean()
+    loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False).mean()
+    d["rsi"]=(100-100/(1+g/loss.replace(0,np.nan))).fillna(50)
+    d["macd"]=c.ewm(span=12,adjust=False).mean()-c.ewm(span=26,adjust=False).mean()
+    d["macds"]=d.macd.ewm(span=9,adjust=False).mean()
+    prev=c.shift(1); tr=pd.concat([h-l,(h-prev).abs(),(l-prev).abs()],axis=1).max(axis=1)
+    d["atr"]=tr.ewm(alpha=1/14,adjust=False).mean()
+    d["fh"]=False; d["fl"]=False
     for i in range(2,len(d)-2):
-        d.loc[i,'fractal_high']=h.iloc[i]>max(h.iloc[i-2],h.iloc[i-1],h.iloc[i+1],h.iloc[i+2])
-        d.loc[i,'fractal_low']=l.iloc[i]<min(l.iloc[i-2],l.iloc[i-1],l.iloc[i+1],l.iloc[i+2])
+        d.loc[i,"fh"]=h.iloc[i]>max(h.iloc[i-2],h.iloc[i-1],h.iloc[i+1],h.iloc[i+2])
+        d.loc[i,"fl"]=l.iloc[i]<min(l.iloc[i-2],l.iloc[i-1],l.iloc[i+1],l.iloc[i+2])
     return d
 
+def plan(d):
+    a,b=d.iloc[-1],d.iloc[-2]; p=float(a.close); atr=float(a.atr)
+    if not np.isfinite(atr) or atr<=0: raise RuntimeError("ATR inválido.")
+    buy=sell=0; br=[]; sr=[]
+    if a.ema20>a.ema50 and p>a.ema20: buy+=2; br.append("EMA20/50 alinhadas para alta")
+    if a.ema20<a.ema50 and p<a.ema20: sell+=2; sr.append("EMA20/50 alinhadas para baixa")
+    if a.macd>a.macds: buy+=1; br.append("MACD positivo")
+    elif a.macd<a.macds: sell+=1; sr.append("MACD negativo")
+    if 50<a.rsi<68: buy+=1; br.append(f"RSI {a.rsi:.1f}")
+    elif 32<a.rsi<50: sell+=1; sr.append(f"RSI {a.rsi:.1f}")
+    if a.close>a.open and a.close>b.close: buy+=1; br.append("vela fechada compradora")
+    elif a.close<a.open and a.close<b.close: sell+=1; sr.append("vela fechada vendedora")
+    side="BUY" if buy>=3 and buy-sell>=2 else "SELL" if sell>=3 and sell-buy>=2 else "AGUARDAR"
+    out=dict(side=side,buy=buy,sell=sell,price=p,atr=atr,rsi=float(a.rsi),ema20=float(a.ema20),ema50=float(a.ema50),
+             macd=float(a.macd),macds=float(a.macds),br=br,sr=sr,lo=None,hi=None,entry=None,sl=None,tp=None,rr=None,
+             state="Sem operação validada",trigger="—",invalid="—")
+    if side=="AGUARDAR": return out
+    recent=d.iloc[-100:]; lows=recent.loc[recent.fl,"low"].tail(8); highs=recent.loc[recent.fh,"high"].tail(8)
+    swinglo=float(lows.min()) if len(lows) else float(recent.low.tail(20).min())
+    swinghi=float(highs.max()) if len(highs) else float(recent.high.tail(20).max())
+    half=max(.12*atr,abs(p)*.00002)
+    if side=="BUY":
+        anchor=min(p,float(a.ema20)); lo,hi=anchor-half,anchor+half
+        sl=min(swinglo-.25*atr,lo-.8*atr); risk=hi-sl
+        tp=max(swinghi if swinghi>hi else hi+2*atr,hi+MIN_RR*risk)
+        entry=(lo+hi)/2; rr=(tp-entry)/(entry-sl)
+        trigger=f"Esperar recuo à zona {lo:.5f}–{hi:.5f} e fecho de vela novamente comprador."
+        invalid=f"Fecho abaixo de {sl:.5f} ou quebra do fundo estrutural."
+        valid=sl<lo<hi<tp
+    else:
+        anchor=max(p,float(a.ema20)); lo,hi=anchor-half,anchor+half
+        sl=max(swinghi+.25*atr,hi+.8*atr); risk=sl-lo
+        tp=min(swinglo if swinglo<lo else lo-2*atr,lo-MIN_RR*risk)
+        entry=(lo+hi)/2; rr=(entry-tp)/(sl-entry)
+        trigger=f"Esperar subida à zona {lo:.5f}–{hi:.5f} e fecho de vela novamente vendedora."
+        invalid=f"Fecho acima de {sl:.5f} ou quebra do topo estrutural."
+        valid=tp<lo<hi<sl
+    # Não perseguir uma entrada que já ficou demasiado distante.
+    if min(abs(p-lo),abs(p-hi))>1.25*atr:
+        out["state"]="CENÁRIO EXPIRADO — não entrar; actualizar análise"
+        out["trigger"]="Preço afastado da zona planeada. Esperar nova configuração."
+        return out
+    if not valid or not np.isfinite([entry,sl,tp,rr]).all() or rr<MIN_RR:
+        out["side"]="AGUARDAR"; out["state"]="Níveis rejeitados pela validação de risco"
+        return out
+    out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp=tp,rr=rr,state="ZONA PENDENTE — aguardar activação",trigger=trigger,invalid=invalid)
+    return out
 
-def technical_decision(d):
-    last=d.iloc[-1]; prev=d.iloc[-2]; close=float(last.close); atr=float(last.atr)
-    if not np.isfinite(atr) or atr<=0: raise RuntimeError('ATR inválido; não é possível calcular níveis de risco.')
-    buy=0; sell=0; why_buy=[]; why_sell=[]
-    if last.ema20>last.ema50 and close>last.ema20: buy+=2; why_buy.append('preço acima das EMA20/50 com alinhamento positivo' if last.ema20>last.ema50 else 'preço acima da EMA20')
-    elif last.ema20<last.ema50 and close<last.ema20: sell+=2; why_sell.append('preço abaixo das EMA20/50 com alinhamento negativo')
-    if last.macd>last.macd_signal: buy+=1; why_buy.append('MACD acima da linha de sinal')
-    elif last.macd<last.macd_signal: sell+=1; why_sell.append('MACD abaixo da linha de sinal')
-    if 50<last.rsi<68: buy+=1; why_buy.append(f'RSI {last.rsi:.1f}, momentum comprador sem sobrecompra extrema')
-    elif 32<last.rsi<50: sell+=1; why_sell.append(f'RSI {last.rsi:.1f}, momentum vendedor sem sobrevenda extrema')
-    if close>prev.close and last.close>last.open: buy+=1; why_buy.append('última vela fechou positiva')
-    elif close<prev.close and last.close<last.open: sell+=1; why_sell.append('última vela fechou negativa')
-    if buy>=3 and buy-sell>=2: side='BUY'
-    elif sell>=3 and sell-buy>=2: side='SELL'
-    else: side='AGUARDAR'
-    # Levels anchored to actual latest Deriv close; no arbitrary model prices.
-    if side=='BUY': entry=close; sl=close-1.2*atr; tp=close+1.8*atr
-    elif side=='SELL': entry=close; sl=close+1.2*atr; tp=close-1.8*atr
-    else: entry=sl=tp=None
-    return {'signal':side,'buy_score':buy,'sell_score':sell,'close':close,'rsi':float(last.rsi),'ema20':float(last.ema20),'ema50':float(last.ema50),'macd':float(last.macd),'macd_signal':float(last.macd_signal),'atr':atr,'entry':entry,'sl':sl,'tp':tp,'rr':1.5 if side!='AGUARDAR' else None,'buy_evidence':why_buy,'sell_evidence':why_sell,'last_epoch':int(last.epoch)}
+def comment_image(img,meta,p,model):
+    key=os.getenv("OPENROUTER_API_KEY","").strip()
+    if not key: return "Comentário visual indisponível: falta OPENROUTER_API_KEY."
+    im=ImageOps.exif_transpose(img).convert("RGB"); im.thumbnail((1300,1300))
+    b=BytesIO(); im.save(b,"JPEG",quality=82)
+    prompt=(f"Comenta em português, até 4 frases, apenas o que vês no screenshot. Plataforma {meta['platform']}, activo Deriv {meta['display']}, timeframe {meta['tf']}. "
+            f"Não alteres o sinal nem os níveis calculados a partir de OHLC. Não inventes dados.")
+    payload={"model":model,"temperature":.1,"max_tokens":300,"messages":[{"role":"user","content":[{"type":"text","text":prompt},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,"+base64.b64encode(b.getvalue()).decode()}}]}]}
+    try:
+        r=requests.post(OR_URL,headers={"Authorization":"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://doncullertrade47.onrender.com","X-Title":APP},json=payload,timeout=(20,90))
+        r.raise_for_status(); c=r.json()["choices"][0]["message"]["content"]
+        return " ".join(x.get("text","") for x in c if isinstance(x,dict)) if isinstance(c,list) else str(c)
+    except Exception: return "Comentário visual indisponível; os níveis técnicos não foram alterados."
 
+def f(x): return "—" if x is None else f"{x:.5f}".rstrip("0").rstrip(".")
 
-def image_comment(image, meta, tech, api_key, model):
-    if not api_key: return 'Comentário visual não disponível: OPENROUTER_API_KEY não configurada.'
-    im=ImageOps.exif_transpose(image).convert('RGB'); im.thumbnail((1400,1400)); b=BytesIO(); im.save(b,'JPEG',quality=82)
-    prompt=(f"Analisa visualmente este screenshot em português. Plataforma {meta['platform']}; ativo selecionado {meta['asset']}; timeframe {meta['timeframe']}. "
-    f"Dados OHLC independentes da Deriv: {meta['deriv_name']}, fecho {tech['close']}, RSI {tech['rsi']:.1f}, EMA20 {tech['ema20']}, EMA50 {tech['ema50']}. "
-    "Comenta apenas o que é legível na imagem. Não determines nem alteres BUY/SELL, não inventes preços, não declares que o símbolo coincide se não estiver visível. Até 4 frases.")
-    payload={'model':model,'temperature':0.1,'max_tokens':350,'messages':[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(b.getvalue()).decode()}}]}]}
-    r=requests.post(OPENROUTER_URL,headers={'Authorization':'Bearer '+api_key,'Content-Type':'application/json','HTTP-Referer':'https://doncullertrade47.onrender.com','X-Title':APP},json=payload,timeout=(20,90))
-    if r.status_code>=400: return f'Comentário visual indisponível (OpenRouter HTTP {r.status_code}).'
-    try: return str(r.json()['choices'][0]['message']['content']).strip()
-    except Exception: return 'O modelo não devolveu comentário visual utilizável.'
+st.markdown(f'<div class="hero"><div class="small">{VERSION} · GESTÃO DE ENTRADA, SL E TP</div><h1>🦁 {APP}</h1><span class="small">Instrumentos listados dinamicamente pela Deriv</span></div>',unsafe_allow_html=True)
+try:
+    with st.sidebar:
+        st.subheader("Configuração")
+        if st.button("🔄 Actualizar instrumentos"): symbols.clear()
+        rows=symbols(); groups={}
+        for x in rows: groups.setdefault(category(x),[]).append(x)
+        order=["Índices sintéticos","Forex","Cripto","Commodities e metais","Índices e acções","Outros"]
+        cats=[x for x in order if groups.get(x)]
+        cat=st.selectbox("Mercado",cats)
+        opts=sorted(groups[cat],key=label)
+        chosen=st.selectbox("Instrumento",[label(x) for x in opts])
+        item=next(x for x in opts if label(x)==chosen)
+        platform=st.selectbox("Plataforma do gráfico",["Deriv MT5","MT5 de outro broker","cTrader","TradingView","Outra"])
+        tf=st.selectbox("Timeframe",list(TF),index=1)
+        model=st.text_input("Modelo OpenRouter",MODEL)
+        st.caption("A lista inclui todos os instrumentos devolvidos pela Deriv; não inventa pares ou símbolos indisponíveis.")
+except Exception as e:
+    st.error(f"Não foi possível obter os instrumentos Deriv: {e}"); st.stop()
 
-
-def fmt(v): return '—' if v is None else f'{v:.5f}'.rstrip('0').rstrip('.')
-
-st.markdown(f'<div class="hero"><div class="small">{VERSION} · DADOS OHLC DERIV + VALIDAÇÃO LOCAL</div><h1>🦁 {APP}</h1><span class="small">Dados de mercado primeiro. Screenshot como confirmação visual.</span></div>',unsafe_allow_html=True)
-with st.sidebar:
-    st.subheader('Configuração')
-    market=st.selectbox('Mercado',list(MARKETS))
-    asset=st.selectbox('Activo',MARKETS[market])
-    platform=st.selectbox('Plataforma do gráfico',PLATFORMS)
-    timeframe=st.selectbox('Timeframe',TIMEFRAMES,index=3)
-    model=st.text_input('Modelo OpenRouter',MODEL_DEFAULT)
-    st.caption('OPENROUTER_API_KEY é configurada nas Environment Variables do Render.')
-
-left,right=st.columns([1.05,.95],gap='large')
+left,right=st.columns([1.05,.95],gap="large")
 with left:
-    st.subheader('Screenshot')
-    upload=st.file_uploader('Carrega o gráfico',type=['png','jpg','jpeg','webp'],key='v16_image')
-    image_obj=None
+    st.subheader("Screenshot")
+    upload=st.file_uploader("Carrega o gráfico",type=["png","jpg","jpeg","webp"],key="v17_upload")
+    img=None
     if upload:
         try:
-            image_obj=Image.open(upload); image_obj.load(); st.image(image_obj,caption='Imagem recebida',use_container_width=True)
-        except (UnidentifiedImageError,OSError): st.error('Imagem inválida. Envia PNG ou JPG.')
-    st.info('Confirma que o símbolo e o timeframe seleccionados correspondem exactamente ao gráfico. A Deriv será a fonte OHLC; a imagem não substitui essa confirmação.')
-    run=st.button('🦁 ANALISAR COM DADOS DERIV',use_container_width=True)
+            img=Image.open(upload); img.load(); st.image(img,caption="Imagem recebida",use_container_width=True)
+        except (UnidentifiedImageError,OSError): st.error("Imagem inválida.")
+    st.warning("O activo e timeframe escolhidos têm de corresponder exactamente ao screenshot. Activos de outro broker podem ter preços diferentes.")
+    run=st.button("🦁 ANALISAR COM DADOS DERIV",use_container_width=True)
 with right:
-    st.subheader('Resultado V16')
+    st.subheader("Resultado V17")
     if run:
-        if not image_obj: st.warning('Carrega primeiro um screenshot válido.')
-        elif timeframe not in GRANULARITY: st.error('Timeframe não suportado pela fonte Deriv.')
+        if img is None: st.warning("Carrega primeiro o screenshot.")
         else:
             try:
-                with st.spinner('A confirmar símbolo e a obter velas reais da Deriv...'):
-                    symbols=get_deriv_symbols(); symbol,deriv_name=find_symbol(asset,symbols)
-                    candles,age=get_candles(symbol,GRANULARITY[timeframe]); data=indicators(candles); tech=technical_decision(data)
-                    meta={'market':market,'asset':asset,'platform':platform,'timeframe':timeframe,'deriv_name':deriv_name}
-                    comment=image_comment(image_obj,meta,tech,os.getenv('OPENROUTER_API_KEY','').strip(),model.strip())
-                    st.session_state['v16_result']={'tech':tech,'comment':comment,'meta':meta,'age':age,'symbol':symbol}
+                sym=item.get("underlying_symbol") or item.get("symbol")
+                with st.spinner("A obter velas fechadas e a validar os níveis..."):
+                    d,age=candles(sym,TF[tf]); d=indicators(d); p=plan(d)
+                    meta={"platform":platform,"display":chosen,"tf":tf}
+                    visual=comment_image(img,meta,p,model.strip())
+                    st.session_state["v17"]={"p":p,"age":age,"epoch":int(d.epoch.iloc[-1]),"sym":sym,"meta":meta,"visual":visual}
             except Exception as e:
-                st.session_state.pop('v16_result',None); st.error(str(e))
-    result=st.session_state.get('v16_result')
+                st.session_state.pop("v17",None); st.error(str(e))
+    result=st.session_state.get("v17")
     if result:
-        t=result['tech']; sig=t['signal']; cls={'BUY':'buy','SELL':'sell','AGUARDAR':'wait'}[sig]
-        st.markdown(f'<div class="box"><div class="{cls}">{sig}</div><b>{result["meta"]["asset"]} · {result["meta"]["timeframe"]}</b><br><span class="small">Fonte: Deriv · {result["symbol"]}</span></div>',unsafe_allow_html=True)
-        st.caption(f'Força técnica calculada: BUY {t["buy_score"]}/4 · SELL {t["sell_score"]}/4 — não é probabilidade de vitória.')
-        st.write(f'**Preço de fecho da última vela:** {fmt(t["close"])}')
-        st.write(f'**RSI:** {t["rsi"]:.1f} | **EMA20:** {fmt(t["ema20"])} | **EMA50:** {fmt(t["ema50"])}')
-        st.write(f'**MACD:** {fmt(t["macd"])} | **Sinal MACD:** {fmt(t["macd_signal"])} | **ATR:** {fmt(t["atr"])}')
-        st.write('**Evidências BUY:** '+('; '.join(t['buy_evidence']) or 'Sem confirmação suficiente.'))
-        st.write('**Evidências SELL:** '+('; '.join(t['sell_evidence']) or 'Sem confirmação suficiente.'))
-        if sig!='AGUARDAR':
-            st.success(f'Entrada de referência: {fmt(t["entry"])}')
-            st.write(f'**Stop Loss:** {fmt(t["sl"])}')
-            st.write(f'**Take Profit:** {fmt(t["tp"])}')
-            st.write('**Risco/retorno planeado:** 1:1,50')
-            st.warning('A entrada é uma referência calculada no fecho da última vela. Espera por nova confirmação/activação; não é ordem automática.')
-        else: st.info('Os indicadores não apresentam vantagem mínima e concordante. Não há entrada validada neste momento.')
-        st.markdown('**Verificação visual do screenshot**')
-        st.write(result['comment'])
-        st.caption(f'Última vela: {datetime.fromtimestamp(t["last_epoch"],timezone.utc).strftime("%Y-%m-%d %H:%M UTC")} · idade aproximada: {int(result["age"])} s.')
-    else: st.caption('O relatório aparecerá aqui depois da análise.')
-
+        p=result["p"]; cls={"BUY":"buy","SELL":"sell","AGUARDAR":"wait"}[p["side"]]
+        st.markdown(f'<div class="box"><div class="{cls}">{p["side"]}</div><b>{result["meta"]["display"]} · {tf}</b><br><span class="small">Deriv OHLC · {result["sym"]}</span></div>',unsafe_allow_html=True)
+        st.caption(f"Força técnica: BUY {p['buy']} · SELL {p['sell']} — não é probabilidade de vitória.")
+        st.write(f"**Último fecho confirmado:** {f(p['price'])}")
+        st.write(f"**RSI:** {p['rsi']:.1f} | **EMA20:** {f(p['ema20'])} | **EMA50:** {f(p['ema50'])}")
+        st.write(f"**MACD:** {f(p['macd'])} | **Sinal:** {f(p['macds'])} | **ATR:** {f(p['atr'])}")
+        st.write("**Evidências BUY:** "+("; ".join(p["br"]) or "Sem confirmação."))
+        st.write("**Evidências SELL:** "+("; ".join(p["sr"]) or "Sem confirmação."))
+        st.write(f"**Estado:** {p['state']}")
+        if p["entry"] is not None:
+            st.success(f"**Zona de entrada:** {f(p['lo'])} – {f(p['hi'])}\n\n**Entrada de referência:** {f(p['entry'])}")
+            st.write(f"**Stop Loss estrutural:** {f(p['sl'])}")
+            st.write(f"**Take Profit técnico:** {f(p['tp'])}")
+            st.write(f"**Risco/retorno calculado:** 1:{p['rr']:.2f}")
+            st.write("**Activação:** "+p["trigger"]); st.write("**Invalidação:** "+p["invalid"])
+            st.warning("Zona pendente, não é ordem imediata. Revalida o preço antes de entrar; se a zona ficar para trás, cancela e analisa novamente.")
+        else: st.info(p["trigger"] if p["state"].startswith("CENÁRIO EXPIRADO") else "Sem níveis operacionais válidos. Não entrar.")
+        st.markdown("**Comentário visual**"); st.write(result["visual"])
+        st.caption(f"Última vela fechada: {datetime.fromtimestamp(result['epoch'],timezone.utc):%Y-%m-%d %H:%M UTC} · idade {int(result['age'])} s.")
+    else: st.caption("O relatório aparecerá aqui após a análise.")
 st.divider()
-st.markdown('<div class="small">V16 não guarda histórico de sinais nem resultados. A análise técnica é calculada localmente a partir de velas públicas da Deriv. O screenshot é comentário complementar. A correspondência do símbolo no gráfico externo deve ser confirmada pelo utilizador. Não há execução automática de ordens nem taxa de acerto garantida. Testa primeiro em conta Demo.</div>',unsafe_allow_html=True)
+st.markdown('<div class="small">V17 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. O SL considera estrutura e ATR; o TP respeita um RR mínimo planeado, mas nenhum método garante que o mercado o alcance. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
