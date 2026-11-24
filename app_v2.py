@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import requests, numpy as np, pandas as pd, streamlit as st, websocket
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-APP="DONCULLER-TRADE47"; VERSION="V17.2"
+APP="DONCULLER-TRADE47"; VERSION="V17.3"
 WS=os.getenv("DERIV_WS_URL","wss://api.derivws.com/trading/v1/options/ws/public")
 OR_URL="https://openrouter.ai/api/v1/chat/completions"
 MODEL=os.getenv("OPENROUTER_MODEL","nvidia/nemotron-3.5-super-vl:free").strip()
@@ -165,21 +165,21 @@ def plan(d):
     rr2=rr_obstacle if tp2 is not None else None
     tp=tp2 if tp2 is not None else tp1
 
-    # Não validar se o primeiro alvo estiver antes de um obstáculo imediato.
-    if not np.isfinite([tp1,rr_obstacle]).all() or room < risk:
+    # V17.3: aceitar RR entre 1.00 e 1.49 com aviso; manter bloqueio abaixo de 1R.
+    if not np.isfinite([tp1,rr_obstacle]).all() or rr_obstacle < 1.0:
         out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp1=tp1,tp2=tp2,tp=tp,
                    rr1=rr1,rr2=rr2,rr=rr2 if rr2 is not None else rr1,
-                   state=f"SINAL {side} — obstáculo técnico demasiado próximo",
-                   trigger="Não entrar: o espaço até ao obstáculo não permite sequer o primeiro alvo de 1R.",
+                   state=f"SINAL {side} — espaço inferior a 1R",
+                   trigger="Não entrar: o obstáculo está antes do primeiro alvo de 1R. Esperar nova configuração.",
                    invalid=invalid)
         return out
 
     out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp1=tp1,tp2=tp2,tp=tp,
                rr1=rr1,rr2=rr2,rr=rr2 if rr2 is not None else rr1,
-               state="ZONA PENDENTE — plano com realização parcial",
+               state=("ZONA PENDENTE — RR reduzido (1R a 1.49R)" if rr_obstacle < 1.5 else "ZONA PENDENTE — plano validado (>=1.5R)"),
                trigger=trigger,invalid=invalid,
-               plan_note=("TP1 a 1R; TP2 no obstáculo estrutural (>=1.5R)." if tp2 is not None
-                          else "TP1 a 1R; não existe espaço estrutural confirmado para TP2."))
+               plan_note=("Plano com RR >=1.5R; TP1 a 1R e TP2 no obstáculo estrutural." if tp2 is not None
+                          else "Plano com RR entre 1R e 1.49R: oportunidade de risco elevado. TP1 a 1R; sem TP2 confirmado."))
     return out
 
 def comment_image(img,meta,p,model):
@@ -230,7 +230,7 @@ with left:
     st.warning("O activo e timeframe escolhidos têm de corresponder exactamente ao screenshot. Activos de outro broker podem ter preços diferentes.")
     run=st.button("🦁 ANALISAR COM DADOS DERIV",use_container_width=True)
 with right:
-    st.subheader("Resultado V17.2")
+    st.subheader("Resultado V17.3")
     if run:
         if img is None: st.warning("Carrega primeiro o screenshot.")
         else:
@@ -255,7 +255,11 @@ with right:
         st.write("**Evidências SELL:** "+("; ".join(p["sr"]) or "Sem confirmação."))
         st.write(f"**Estado:** {p['state']}")
         if p["entry"] is not None and p["state"].startswith("ZONA PENDENTE"):
-            st.success(f"**Zona de entrada:** {f(p['lo'])} – {f(p['hi'])}\n\n**Entrada de referência:** {f(p['entry'])}")
+            if p["rr2"] is not None:
+                st.success("PLANO VALIDADO — esperar o preço chegar à zona e confirmar a activação.")
+            else:
+                st.warning("OPORTUNIDADE COM RR REDUZIDO — esperar o preço chegar à zona; risco superior e sem TP2 confirmado.")
+            st.write(f"**Zona de entrada:** {f(p['lo'])} – {f(p['hi'])}\n\n**Entrada de referência:** {f(p['entry'])}")
             st.write(f"**Stop Loss estrutural:** {f(p['sl'])}")
             st.write(f"**TP1 (realização parcial, 1R):** {f(p['tp1'])}")
             st.write(f"**TP2 (se houver espaço estrutural):** {f(p['tp2'])}")
@@ -274,4 +278,4 @@ with right:
         st.caption(f"Última vela fechada: {datetime.fromtimestamp(result['epoch'],timezone.utc):%Y-%m-%d %H:%M UTC} · idade {int(result['age'])} s.")
     else: st.caption("O relatório aparecerá aqui após a análise.")
 st.divider()
-st.markdown('<div class="small">V17 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. A V17.2 mantém o motor direccional V17 e apresenta TP1/TP2 para gestão manual; nenhum método garante que o mercado alcance os alvos. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
+st.markdown('<div class="small">V17 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. A V17.3 mantém o motor direccional V17 e apresenta TP1/TP2 para gestão manual; nenhum método garante que o mercado alcance os alvos. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
