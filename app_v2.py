@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import requests, numpy as np, pandas as pd, streamlit as st, websocket
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-APP="DONCULLER-TRADE47"; VERSION="V17.0"
+APP="DONCULLER-TRADE47"; VERSION="V17.1"
 WS=os.getenv("DERIV_WS_URL","wss://api.derivws.com/trading/v1/options/ws/public")
 OR_URL="https://openrouter.ai/api/v1/chat/completions"
 MODEL=os.getenv("OPENROUTER_MODEL","nvidia/nemotron-3.5-super-vl:free").strip()
@@ -112,7 +112,9 @@ def plan(d):
     if side=="BUY":
         anchor=min(p,float(a.ema20)); lo,hi=anchor-half,anchor+half
         sl=min(swinglo-.25*atr,lo-.8*atr); risk=hi-sl
-        tp=max(swinghi if swinghi>hi else hi+2*atr,hi+MIN_RR*risk)
+        # Alvo: primeiro obstáculo estrutural acima da zona; sem obstáculo visível,
+        # usar apenas uma referência de 2 ATR. Nunca esticar o TP para fabricar RR.
+        tp=swinghi if swinghi>hi else hi+2*atr
         entry=(lo+hi)/2; rr=(tp-entry)/(entry-sl)
         trigger=f"Esperar recuo à zona {lo:.5f}–{hi:.5f} e fecho de vela novamente comprador."
         invalid=f"Fecho abaixo de {sl:.5f} ou quebra do fundo estrutural."
@@ -120,7 +122,9 @@ def plan(d):
     else:
         anchor=max(p,float(a.ema20)); lo,hi=anchor-half,anchor+half
         sl=max(swinghi+.25*atr,hi+.8*atr); risk=sl-lo
-        tp=min(swinglo if swinglo<lo else lo-2*atr,lo-MIN_RR*risk)
+        # Alvo: primeiro obstáculo estrutural abaixo da zona; sem obstáculo visível,
+        # usar apenas uma referência de 2 ATR. Nunca esticar o TP para fabricar RR.
+        tp=swinglo if swinglo<lo else lo-2*atr
         entry=(lo+hi)/2; rr=(entry-tp)/(sl-entry)
         trigger=f"Esperar subida à zona {lo:.5f}–{hi:.5f} e fecho de vela novamente vendedora."
         invalid=f"Fecho acima de {sl:.5f} ou quebra do topo estrutural."
@@ -131,7 +135,11 @@ def plan(d):
         out["trigger"]="Preço afastado da zona planeada. Esperar nova configuração."
         return out
     if not valid or not np.isfinite([entry,sl,tp,rr]).all() or rr<MIN_RR:
-        out["side"]="AGUARDAR"; out["state"]="Níveis rejeitados pela validação de risco"
+        # Preservar a direcção técnica: sinal BUY/SELL não é apagado só porque
+        # o plano de entrada/saída não passou na validação de risco.
+        out["state"]=("SINAL " + side + " — plano não validado: RR abaixo de 1:1.5" if valid else
+                      "SINAL " + side + " — níveis técnicos inválidos")
+        out["trigger"]="A direcção foi detectada, mas não há plano operacional aprovado. Não entrar nestes níveis."
         return out
     out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp=tp,rr=rr,state="ZONA PENDENTE — aguardar activação",trigger=trigger,invalid=invalid)
     return out
@@ -175,7 +183,7 @@ except Exception as e:
 left,right=st.columns([1.05,.95],gap="large")
 with left:
     st.subheader("Screenshot")
-    upload=st.file_uploader("Carrega o gráfico",type=["png","jpg","jpeg","webp"],key="v17_upload")
+    upload=st.file_uploader("Carrega o gráfico",type=["png","jpg","jpeg","webp"],key="v171_upload")
     img=None
     if upload:
         try:
@@ -184,7 +192,7 @@ with left:
     st.warning("O activo e timeframe escolhidos têm de corresponder exactamente ao screenshot. Activos de outro broker podem ter preços diferentes.")
     run=st.button("🦁 ANALISAR COM DADOS DERIV",use_container_width=True)
 with right:
-    st.subheader("Resultado V17")
+    st.subheader("Resultado V17.1")
     if run:
         if img is None: st.warning("Carrega primeiro o screenshot.")
         else:
@@ -194,10 +202,10 @@ with right:
                     d,age=candles(sym,TF[tf]); d=indicators(d); p=plan(d)
                     meta={"platform":platform,"display":chosen,"tf":tf}
                     visual=comment_image(img,meta,p,model.strip())
-                    st.session_state["v17"]={"p":p,"age":age,"epoch":int(d.epoch.iloc[-1]),"sym":sym,"meta":meta,"visual":visual}
+                    st.session_state["v171"]={"p":p,"age":age,"epoch":int(d.epoch.iloc[-1]),"sym":sym,"meta":meta,"visual":visual}
             except Exception as e:
-                st.session_state.pop("v17",None); st.error(str(e))
-    result=st.session_state.get("v17")
+                st.session_state.pop("v171",None); st.error(str(e))
+    result=st.session_state.get("v171")
     if result:
         p=result["p"]; cls={"BUY":"buy","SELL":"sell","AGUARDAR":"wait"}[p["side"]]
         st.markdown(f'<div class="box"><div class="{cls}">{p["side"]}</div><b>{result["meta"]["display"]} · {tf}</b><br><span class="small">Deriv OHLC · {result["sym"]}</span></div>',unsafe_allow_html=True)
@@ -220,4 +228,4 @@ with right:
         st.caption(f"Última vela fechada: {datetime.fromtimestamp(result['epoch'],timezone.utc):%Y-%m-%d %H:%M UTC} · idade {int(result['age'])} s.")
     else: st.caption("O relatório aparecerá aqui após a análise.")
 st.divider()
-st.markdown('<div class="small">V17 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. O SL considera estrutura e ATR; o TP respeita um RR mínimo planeado, mas nenhum método garante que o mercado o alcance. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
+st.markdown('<div class="small">V17.1 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. O SL considera estrutura e ATR; o TP respeita um RR mínimo planeado, mas nenhum método garante que o mercado o alcance. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
