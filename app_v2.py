@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import requests, numpy as np, pandas as pd, streamlit as st, websocket
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-APP="DONCULLER-TRADE47"; VERSION="V17.1"
+APP="DONCULLER-TRADE47"; VERSION="V17.2"
 WS=os.getenv("DERIV_WS_URL","wss://api.derivws.com/trading/v1/options/ws/public")
 OR_URL="https://openrouter.ai/api/v1/chat/completions"
 MODEL=os.getenv("OPENROUTER_MODEL","nvidia/nemotron-3.5-super-vl:free").strip()
@@ -91,57 +91,95 @@ def indicators(d):
 def plan(d):
     a,b=d.iloc[-1],d.iloc[-2]; p=float(a.close); atr=float(a.atr)
     if not np.isfinite(atr) or atr<=0: raise RuntimeError("ATR inválido.")
+
+    # Motor direccional original V17 — mantido sem alterações.
     buy=sell=0; br=[]; sr=[]
     if a.ema20>a.ema50 and p>a.ema20: buy+=2; br.append("EMA20/50 alinhadas para alta")
     if a.ema20<a.ema50 and p<a.ema20: sell+=2; sr.append("EMA20/50 alinhadas para baixa")
-    if a.macd>a.macds: buy+=1; br.append("MACD positivo")
-    elif a.macd<a.macds: sell+=1; sr.append("MACD negativo")
+    if a.macd>a.macds: buy+=1; br.append("MACD acima da linha de sinal")
+    elif a.macd<a.macds: sell+=1; sr.append("MACD abaixo da linha de sinal")
     if 50<a.rsi<68: buy+=1; br.append(f"RSI {a.rsi:.1f}")
     elif 32<a.rsi<50: sell+=1; sr.append(f"RSI {a.rsi:.1f}")
     if a.close>a.open and a.close>b.close: buy+=1; br.append("vela fechada compradora")
     elif a.close<a.open and a.close<b.close: sell+=1; sr.append("vela fechada vendedora")
     side="BUY" if buy>=3 and buy-sell>=2 else "SELL" if sell>=3 and sell-buy>=2 else "AGUARDAR"
+
     out=dict(side=side,buy=buy,sell=sell,price=p,atr=atr,rsi=float(a.rsi),ema20=float(a.ema20),ema50=float(a.ema50),
-             macd=float(a.macd),macds=float(a.macds),br=br,sr=sr,lo=None,hi=None,entry=None,sl=None,tp=None,rr=None,
-             state="Sem operação validada",trigger="—",invalid="—")
+             macd=float(a.macd),macds=float(a.macds),br=br,sr=sr,lo=None,hi=None,entry=None,sl=None,tp=None,
+             tp1=None,tp2=None,rr=None,rr1=None,rr2=None,state="Sem operação validada",
+             trigger="—",invalid="—",plan_note="")
     if side=="AGUARDAR": return out
-    recent=d.iloc[-100:]; lows=recent.loc[recent.fl,"low"].tail(8); highs=recent.loc[recent.fh,"high"].tail(8)
-    swinglo=float(lows.min()) if len(lows) else float(recent.low.tail(20).min())
-    swinghi=float(highs.max()) if len(highs) else float(recent.high.tail(20).max())
+
+    recent=d.iloc[-100:]
+    lows=recent.loc[recent.fl,"low"].astype(float)
+    highs=recent.loc[recent.fh,"high"].astype(float)
     half=max(.12*atr,abs(p)*.00002)
+
     if side=="BUY":
         anchor=min(p,float(a.ema20)); lo,hi=anchor-half,anchor+half
-        sl=min(swinglo-.25*atr,lo-.8*atr); risk=hi-sl
-        # Alvo: primeiro obstáculo estrutural acima da zona; sem obstáculo visível,
-        # usar apenas uma referência de 2 ATR. Nunca esticar o TP para fabricar RR.
-        tp=swinghi if swinghi>hi else hi+2*atr
-        entry=(lo+hi)/2; rr=(tp-entry)/(entry-sl)
+        entry=(lo+hi)/2
+        # Apoio mais próximo abaixo da entrada, em vez do extremo mais distante
+        # dos oito fractais anteriores.
+        supports=lows[lows < lo]
+        structural_low=float(supports.max()) if len(supports) else float(recent.low.tail(20).min())
+        sl=structural_low-.25*atr
+        risk=entry-sl
+        obstacles=highs[highs > entry]
+        obstacle=float(obstacles.min()) if len(obstacles) else hi+2*atr
+        direction=1
         trigger=f"Esperar recuo à zona {lo:.5f}–{hi:.5f} e fecho de vela novamente comprador."
-        invalid=f"Fecho abaixo de {sl:.5f} ou quebra do fundo estrutural."
-        valid=sl<lo<hi<tp
+        invalid=f"Fecho abaixo do Stop Loss {sl:.5f} ou quebra do apoio estrutural."
+        valid=sl<lo<hi
     else:
         anchor=max(p,float(a.ema20)); lo,hi=anchor-half,anchor+half
-        sl=max(swinghi+.25*atr,hi+.8*atr); risk=sl-lo
-        # Alvo: primeiro obstáculo estrutural abaixo da zona; sem obstáculo visível,
-        # usar apenas uma referência de 2 ATR. Nunca esticar o TP para fabricar RR.
-        tp=swinglo if swinglo<lo else lo-2*atr
-        entry=(lo+hi)/2; rr=(entry-tp)/(sl-entry)
+        entry=(lo+hi)/2
+        # Resistência mais próxima acima da entrada.
+        resistances=highs[highs > hi]
+        structural_high=float(resistances.min()) if len(resistances) else float(recent.high.tail(20).max())
+        sl=structural_high+.25*atr
+        risk=sl-entry
+        obstacles=lows[lows < entry]
+        obstacle=float(obstacles.max()) if len(obstacles) else lo-2*atr
+        direction=-1
         trigger=f"Esperar subida à zona {lo:.5f}–{hi:.5f} e fecho de vela novamente vendedora."
-        invalid=f"Fecho acima de {sl:.5f} ou quebra do topo estrutural."
-        valid=tp<lo<hi<sl
-    # Não perseguir uma entrada que já ficou demasiado distante.
+        invalid=f"Fecho acima do Stop Loss {sl:.5f} ou quebra da resistência estrutural."
+        valid=tp_placeholder = (lo<hi<sl)
+
     if min(abs(p-lo),abs(p-hi))>1.25*atr:
-        out["state"]="CENÁRIO EXPIRADO — não entrar; actualizar análise"
-        out["trigger"]="Preço afastado da zona planeada. Esperar nova configuração."
+        out.update(state="CENÁRIO EXPIRADO — não entrar; actualizar análise",
+                   trigger="Preço afastado da zona planeada. Esperar nova configuração.")
         return out
-    if not valid or not np.isfinite([entry,sl,tp,rr]).all() or rr<MIN_RR:
-        # Preservar a direcção técnica: sinal BUY/SELL não é apagado só porque
-        # o plano de entrada/saída não passou na validação de risco.
-        out["state"]=("SINAL " + side + " — plano não validado: RR abaixo de 1:1.5" if valid else
-                      "SINAL " + side + " — níveis técnicos inválidos")
-        out["trigger"]="A direcção foi detectada, mas não há plano operacional aprovado. Não entrar nestes níveis."
+
+    if not valid or not np.isfinite([entry,sl,risk,obstacle]).all() or risk<=0:
+        out.update(state=f"SINAL {side} — níveis estruturais inválidos",
+                   trigger="A direcção foi detectada, mas não foi possível calcular níveis estruturais fiáveis.")
         return out
-    out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp=tp,rr=rr,state="ZONA PENDENTE — aguardar activação",trigger=trigger,invalid=invalid)
+
+    # Gestão em duas etapas: primeiro objectivo a 1R para realizar parte;
+    # segundo objectivo apenas se o obstáculo técnico permitir pelo menos 1.5R.
+    tp1=entry+direction*risk
+    room=direction*(obstacle-entry)
+    rr_obstacle=room/risk if risk>0 else float("nan")
+    tp2=obstacle if np.isfinite(rr_obstacle) and rr_obstacle>=1.5 else None
+    rr1=1.0
+    rr2=rr_obstacle if tp2 is not None else None
+    tp=tp2 if tp2 is not None else tp1
+
+    # Não validar se o primeiro alvo estiver antes de um obstáculo imediato.
+    if not np.isfinite([tp1,rr_obstacle]).all() or room < risk:
+        out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp1=tp1,tp2=tp2,tp=tp,
+                   rr1=rr1,rr2=rr2,rr=rr2 if rr2 is not None else rr1,
+                   state=f"SINAL {side} — obstáculo técnico demasiado próximo",
+                   trigger="Não entrar: o espaço até ao obstáculo não permite sequer o primeiro alvo de 1R.",
+                   invalid=invalid)
+        return out
+
+    out.update(lo=lo,hi=hi,entry=entry,sl=sl,tp1=tp1,tp2=tp2,tp=tp,
+               rr1=rr1,rr2=rr2,rr=rr2 if rr2 is not None else rr1,
+               state="ZONA PENDENTE — plano com realização parcial",
+               trigger=trigger,invalid=invalid,
+               plan_note=("TP1 a 1R; TP2 no obstáculo estrutural (>=1.5R)." if tp2 is not None
+                          else "TP1 a 1R; não existe espaço estrutural confirmado para TP2."))
     return out
 
 def comment_image(img,meta,p,model):
@@ -183,7 +221,7 @@ except Exception as e:
 left,right=st.columns([1.05,.95],gap="large")
 with left:
     st.subheader("Screenshot")
-    upload=st.file_uploader("Carrega o gráfico",type=["png","jpg","jpeg","webp"],key="v171_upload")
+    upload=st.file_uploader("Carrega o gráfico",type=["png","jpg","jpeg","webp"],key="v172_upload")
     img=None
     if upload:
         try:
@@ -192,7 +230,7 @@ with left:
     st.warning("O activo e timeframe escolhidos têm de corresponder exactamente ao screenshot. Activos de outro broker podem ter preços diferentes.")
     run=st.button("🦁 ANALISAR COM DADOS DERIV",use_container_width=True)
 with right:
-    st.subheader("Resultado V17.1")
+    st.subheader("Resultado V17.2")
     if run:
         if img is None: st.warning("Carrega primeiro o screenshot.")
         else:
@@ -202,10 +240,10 @@ with right:
                     d,age=candles(sym,TF[tf]); d=indicators(d); p=plan(d)
                     meta={"platform":platform,"display":chosen,"tf":tf}
                     visual=comment_image(img,meta,p,model.strip())
-                    st.session_state["v171"]={"p":p,"age":age,"epoch":int(d.epoch.iloc[-1]),"sym":sym,"meta":meta,"visual":visual}
+                    st.session_state["v172"]={"p":p,"age":age,"epoch":int(d.epoch.iloc[-1]),"sym":sym,"meta":meta,"visual":visual}
             except Exception as e:
-                st.session_state.pop("v171",None); st.error(str(e))
-    result=st.session_state.get("v171")
+                st.session_state.pop("v172",None); st.error(str(e))
+    result=st.session_state.get("v172")
     if result:
         p=result["p"]; cls={"BUY":"buy","SELL":"sell","AGUARDAR":"wait"}[p["side"]]
         st.markdown(f'<div class="box"><div class="{cls}">{p["side"]}</div><b>{result["meta"]["display"]} · {tf}</b><br><span class="small">Deriv OHLC · {result["sym"]}</span></div>',unsafe_allow_html=True)
@@ -216,16 +254,24 @@ with right:
         st.write("**Evidências BUY:** "+("; ".join(p["br"]) or "Sem confirmação."))
         st.write("**Evidências SELL:** "+("; ".join(p["sr"]) or "Sem confirmação."))
         st.write(f"**Estado:** {p['state']}")
-        if p["entry"] is not None:
+        if p["entry"] is not None and p["state"].startswith("ZONA PENDENTE"):
             st.success(f"**Zona de entrada:** {f(p['lo'])} – {f(p['hi'])}\n\n**Entrada de referência:** {f(p['entry'])}")
             st.write(f"**Stop Loss estrutural:** {f(p['sl'])}")
-            st.write(f"**Take Profit técnico:** {f(p['tp'])}")
-            st.write(f"**Risco/retorno calculado:** 1:{p['rr']:.2f}")
+            st.write(f"**TP1 (realização parcial, 1R):** {f(p['tp1'])}")
+            st.write(f"**TP2 (se houver espaço estrutural):** {f(p['tp2'])}")
+            st.write(f"**Risco/retorno TP1:** 1:{p['rr1']:.2f}")
+            st.write(f"**Risco/retorno TP2:** {'1:'+format(p['rr2'],'.2f') if p['rr2'] is not None else 'Não confirmado'}")
             st.write("**Activação:** "+p["trigger"]); st.write("**Invalidação:** "+p["invalid"])
-            st.warning("Zona pendente, não é ordem imediata. Revalida o preço antes de entrar; se a zona ficar para trás, cancela e analisa novamente.")
-        else: st.info(p["trigger"] if p["state"].startswith("CENÁRIO EXPIRADO") else "Sem níveis operacionais válidos. Não entrar.")
+            st.caption(p["plan_note"])
+            st.warning("A aplicação não executa saídas parciais. TP1/TP2 são referências para gestão manual; confirma sempre o preço e os custos.")
+        else:
+            if p.get("entry") is not None:
+                st.write(f"**Entrada calculada:** {f(p['entry'])} | **SL:** {f(p['sl'])}")
+                st.write(f"**TP1:** {f(p['tp1'])} | **TP2:** {f(p['tp2'])}")
+                st.write(f"**RR TP1:** {p['rr1']:.2f} | **RR TP2:** {'1:'+format(p['rr2'],'.2f') if p['rr2'] is not None else 'Não confirmado'}")
+            st.info(p["trigger"] if p["trigger"] != "—" else "Sem níveis operacionais válidos. Não entrar.")
         st.markdown("**Comentário visual**"); st.write(result["visual"])
         st.caption(f"Última vela fechada: {datetime.fromtimestamp(result['epoch'],timezone.utc):%Y-%m-%d %H:%M UTC} · idade {int(result['age'])} s.")
     else: st.caption("O relatório aparecerá aqui após a análise.")
 st.divider()
-st.markdown('<div class="small">V17.1 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. O SL considera estrutura e ATR; o TP respeita um RR mínimo planeado, mas nenhum método garante que o mercado o alcance. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
+st.markdown('<div class="small">V17 não guarda histórico. A lista é dinâmica, mas limitada aos instrumentos que a Deriv disponibiliza nesta API. A V17.2 mantém o motor direccional V17 e apresenta TP1/TP2 para gestão manual; nenhum método garante que o mercado alcance os alvos. Testar primeiro em Demo.</div>',unsafe_allow_html=True)
